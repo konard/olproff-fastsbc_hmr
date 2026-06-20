@@ -94,12 +94,14 @@ if(HMR_HAVE_LLVM)
     src/pipeline/Compiler.cpp
   )
   target_include_directories(hmr_codegen
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+  # SYSTEM must be its own call: as a mid-list keyword CMake treats it as a path.
+  # Marking LLVM's headers system silences their (copious) -W noise in our build.
+  target_include_directories(hmr_codegen SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
   target_compile_definitions(hmr_codegen PRIVATE ${LLVM_DEFINITIONS} HMR_HAVE_LLVM=1)
   target_compile_definitions(hmr_codegen PUBLIC HMR_HAVE_LLVM=1)
   target_link_libraries(hmr_codegen
-    PUBLIC hmr_core
+    PUBLIC hmr_core ${CMAKE_DL_LIBS}
     PRIVATE hmr_warnings ${HMR_LLVM_LIBS})
 endif()
 
