@@ -37,3 +37,9 @@ compile_commands.json
 hmr_*.ll
 hmr_*.o
 hmr_*.so
+
+# Locally captured CI / build logs
+/ci-logs/
+
+# Generated probe IR (regenerate from the .c with clang -S -emit-llvm)
+experiments/*.ll
