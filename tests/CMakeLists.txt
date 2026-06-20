@@ -22,7 +22,13 @@ target_include_directories(hmr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(HMR_HAVE_LLVM)
     target_link_libraries(hmr_tests PRIVATE hmr_codegen)
-    target_compile_definitions(hmr_tests PRIVATE HMR_HAVE_LLVM=1)
+    target_compile_definitions(hmr_tests PRIVATE
+        HMR_HAVE_LLVM=1
+        HMR_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/hmr_samples")
+    # The codegen tests dlopen a freshly compiled module which imports the host's
+    # hmr_rt_* runtime symbols. Export the executable's dynamic symbols so the
+    # loader can resolve them (the test references makeContext to pull them in).
+    set_target_properties(hmr_tests PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
 add_test(NAME hmr_tests COMMAND hmr_tests)
