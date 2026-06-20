@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "issue-*"]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Full build: front-end + LLVM-backed codegen/backend/module/pipeline, the
+  # whole test suite, and the (reported, non-gating) benchmarks.
+  # ---------------------------------------------------------------------------
+  build-test:
+    name: build + test (LLVM ${{ matrix.llvm }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: [18]
+    env:
+      LLVM_DIR: /usr/lib/llvm-${{ matrix.llvm }}/lib/cmake/llvm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ \
+            llvm-${{ matrix.llvm }}-dev lld-${{ matrix.llvm }}
+          cmake --version
+          g++ --version | head -1
+          llvm-config-${{ matrix.llvm }} --version
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DLLVM_DIR="${LLVM_DIR}"
+          -DHMR_ENABLE_LLVM=ON
+          -DHMR_BUILD_TESTS=ON
+          -DHMR_BUILD_BENCHMARKS=ON
+          -DHMR_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Benchmarks (reported, non-gating)
+        run: |
+          ./build/benchmarks/hmr_bench_frontend || true
+          ./build/benchmarks/hmr_bench_pipeline || true
+
+  # ---------------------------------------------------------------------------
+  # Front-end-only build: proves the LLVM-free core (lexer/parser/optimizer/
+  # runtime + hmrc) and its tests still build and pass when LLVM is absent,
+  # exercising the CMake graceful-degradation path (-DHMR_ENABLE_LLVM=OFF).
+  # ---------------------------------------------------------------------------
+  frontend-only:
+    name: build + test (front-end only, no LLVM)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DHMR_ENABLE_LLVM=OFF
+          -DHMR_BUILD_TESTS=ON
+          -DHMR_BUILD_BENCHMARKS=ON
+          -DHMR_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
