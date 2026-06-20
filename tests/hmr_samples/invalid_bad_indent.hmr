@@ -1,0 +1,6 @@
+# NEGATIVE TEST: the dedent on the last line lands between indentation levels
+# (4 spaces is neither 0 nor 8), which the indentation-aware lexer rejects.
+sip-manipulation BadIndent
+        header-rule
+                name  x
+    header-name  From

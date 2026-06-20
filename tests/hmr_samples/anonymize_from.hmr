@@ -1,0 +1,33 @@
+# Privacy: replace the From user with "anonymous" and add a Privacy header when
+# the request carries a restricted CLI.
+sip-manipulation AnonymizeFrom
+        description  "RFC 3323 style caller anonymization"
+
+        header-rule
+                name  storeOriginalUser
+                header-name  From
+                action  store
+                comparison-type  pattern-rule
+                match-value  sip:([^@]+)@
+
+        header-rule
+                name  anonymizeUser
+                header-name  From
+                action  manipulate
+                msg-type  request
+                element-rule
+                        name  replaceUser
+                        type  uri-user
+                        action  replace
+                        new-value  anonymous
+                element-rule
+                        name  replaceDisplay
+                        type  uri-display
+                        action  replace
+                        new-value  Anonymous
+
+        header-rule
+                name  addPrivacy
+                header-name  Privacy
+                action  add
+                new-value  id

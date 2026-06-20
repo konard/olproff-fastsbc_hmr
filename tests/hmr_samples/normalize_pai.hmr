@@ -1,0 +1,26 @@
+# Trunk normalization: tag outbound INVITEs with the trunk group and realm,
+# and conditionally reject calls from a blocked prefix.
+sip-manipulation NormalizePAI
+        description  "Add P-Asserted-Identity and trunk context on egress"
+
+        header-rule
+                name  addPAI
+                header-name  P-Asserted-Identity
+                action  add
+                msg-type  request
+                methods  INVITE,UPDATE
+                new-value  sip:$TRUNK_GROUP@$LOCAL_IP
+
+        header-rule
+                name  tagRealm
+                header-name  X-Realm
+                action  add
+                new-value  realm=$REALM
+
+        header-rule
+                name  rejectBlockedPrefix
+                header-name  To
+                action  reject
+                comparison-type  pattern-rule
+                msg-type  request
+                match-value  sip:1900[0-9]+@

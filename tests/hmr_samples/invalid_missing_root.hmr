@@ -1,0 +1,6 @@
+# NEGATIVE TEST: a configuration must start with 'sip-manipulation'. Starting
+# with a bare header-rule is a syntax error.
+header-rule
+        name  orphan
+        header-name  From
+        action  delete-header

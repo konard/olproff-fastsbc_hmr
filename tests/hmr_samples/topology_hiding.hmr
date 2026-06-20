@@ -1,0 +1,32 @@
+# Topology hiding: remove headers that leak the internal network and rewrite
+# the From host to the public address.
+sip-manipulation TopologyHiding
+        description  "Strip internal topology from outbound requests"
+
+        header-rule
+                name  anonFromHost
+                header-name  From
+                action  manipulate
+                comparison-type  case-sensitive
+                msg-type  request
+                element-rule
+                        name  rewriteHost
+                        type  uri-host
+                        action  replace
+                        match-value  internal\.local
+                        new-value  $LOCAL_IP
+
+        header-rule
+                name  dropServer
+                header-name  Server
+                action  delete-header
+
+        header-rule
+                name  dropUserAgent
+                header-name  User-Agent
+                action  delete-header
+
+        header-rule
+                name  dropVia
+                header-name  X-Internal-Route
+                action  delete-header
