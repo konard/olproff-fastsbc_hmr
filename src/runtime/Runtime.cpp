@@ -129,11 +129,13 @@ void HmrContext::prepare(const HmrModuleInfo& info) {
     }
     slots.assign(info.num_slots, std::string{});
     scratch.reserve(256);
+    uriScratch.reserve(256);
 }
 
 void HmrContext::resetForApply() {
     hasMatch = false;
     scratch.clear();
+    uriScratch.clear();
     logs.clear();
     rejected = false;
     rejectCode = 0;
@@ -286,7 +288,9 @@ HmrStr hmr_rt_uri_set(HmrContext* ctx, HmrStr header_value,
     std::string_view nv = view(new_value);
     ParsedUri u = parseUri(v);
 
-    std::string& out = ctx->scratch;
+    // Build into a dedicated buffer so `new_value` may alias `ctx->scratch`
+    // (e.g. the result of the value builder) without being clobbered here.
+    std::string& out = ctx->uriScratch;
     out.clear();
     switch (element_type) {
         case HMR_URI_USER: {

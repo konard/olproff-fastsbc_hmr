@@ -39,6 +39,11 @@ struct HmrContext {
     // Reusable scratch buffer for new-value construction.
     std::string scratch;
 
+    // Separate output buffer for URI rewrites. Kept distinct from `scratch` so
+    // a value-builder result (which lives in `scratch`) can be passed as the
+    // replacement to hmr_rt_uri_set without the rebuild clobbering its input.
+    std::string uriScratch;
+
     // Diagnostics / control side-channel.
     std::vector<std::string> logs;
     bool rejected = false;
