@@ -14,7 +14,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(fastsbc_hmr
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Oracle HMR DSL -> native .so compiler (direct LLVM IR)"
   LANGUAGES CXX)
 
