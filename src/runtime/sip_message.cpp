@@ -183,7 +183,11 @@ HmrSipMsg HmrSipMsg::parse(std::string_view raw) noexcept {
     bool first = true;
 
     auto next_line = [&](std::string_view& out) -> bool {
-        if (pos > raw.size()) return false;
+        // Stop once the cursor has reached the end. Using `>=` (not `>`) avoids
+        // yielding a spurious empty final line when `raw` ends with a newline,
+        // which would otherwise be misread as the header/body separator and push
+        // `pos` one past the end.
+        if (pos >= raw.size()) return false;
         std::size_t nl = raw.find('\n', pos);
         if (nl == std::string_view::npos) {
             out = raw.substr(pos);
@@ -238,8 +242,10 @@ HmrSipMsg HmrSipMsg::parse(std::string_view raw) noexcept {
             continue;
         }
         if (t.empty()) {
-            // Blank line: end of headers. Everything after is the body.
-            msg.body = Slice::of(raw.substr(pos));
+            // Blank line: end of headers. Everything after is the body (which
+            // may be empty). Guard the offset defensively: `pos` is a valid
+            // substr argument only up to and including `raw.size()`.
+            if (pos <= raw.size()) msg.body = Slice::of(raw.substr(pos));
             break;
         }
 

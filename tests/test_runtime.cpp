@@ -113,6 +113,26 @@ TEST(SipModel, SerializeRoundTrip) {
     CHECK_EQ(sv(out), raw);  // byte-identical round trip
 }
 
+TEST(SipModel, ParseBodylessTrailingNewline) {
+    // A bodyless request that ends with a single CRLF (no terminating blank
+    // line) must parse and serialize without reading past the buffer. Regression
+    // for an out-of-range substr when the trailing newline produced a spurious
+    // empty final line whose "body" offset ran one past the end.
+    std::string raw =
+        "INVITE sip:bob@example.com SIP/2.0\r\n"
+        "From: <sip:alice@internal.local>;tag=99\r\n"
+        "Contact: <sip:alice@10.0.0.1>\r\n";
+    HmrSipMsg m = HmrSipMsg::parse(raw);
+    CHECK(m.is_request);
+    CHECK_EQ(m.num_headers, 2u);  // From, Contact
+    CHECK_EQ(m.body.sv(), "");    // no body section
+    HmrArena arena;
+    HmrStr out = m.serialize(arena);
+    // Serialization normalizes by emitting the RFC 3261 header/body separator
+    // CRLF even when the input omitted it; the headers round-trip intact.
+    CHECK_EQ(sv(out), raw + "\r\n");
+}
+
 TEST(SipModel, HeaderLookupCaseInsensitive) {
     std::string raw = kInvite;
     HmrSipMsg m = HmrSipMsg::parse(raw);
