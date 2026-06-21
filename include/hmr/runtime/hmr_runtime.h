@@ -4,18 +4,24 @@
  *
  * A compiled ruleset is a native shared object that exports a single entry
  * point, `hmr_apply`, plus a static descriptor, `hmr_module_info`. The module
- * never allocates: it manipulates the SIP message and reads/writes scratch
- * state through the `hmr_rt_*` callbacks declared here, all of which operate on
- * caller-owned, preallocated storage. This header is the *only* contract shared
- * between the compiler-generated code and the runtime, so it is intentionally
- * pure C and ABI-stable (versioned via HMR_ABI_VERSION).
+ * never allocates: it reads the SIP message through zero-copy views and writes
+ * modified values into a per-worker bump arena, all via the `hmr_rt_*` callbacks
+ * declared here. This header is the *only* contract shared between the
+ * compiler-generated code and the runtime, so it is intentionally pure C and
+ * ABI-stable (versioned via HMR_ABI_VERSION).
  *
- * Ownership / lifetime rules:
- *   * HmrStr is a non-owning (pointer,len) view. Strings returned by the
- *     runtime are valid until the next mutating call on the same object.
- *   * The generated module must not free or retain any HmrStr across calls.
- *   * All callbacks are reentrant with respect to distinct HmrContext objects,
- *     enabling one context per worker thread with zero shared mutable state.
+ * Memory model (review point #4 — zero-copy arena):
+ *   * The input packet is immutable. Header names/values and URI components are
+ *     slices into the original raw buffer; reading them copies nothing.
+ *   * Mutations (set/add header, set field, value-builder results) are
+ *     bump-allocated from a 64 KiB arena owned by the HmrContext (one per worker
+ *     thread). The arena is reset in O(1) between packets — no per-packet heap
+ *     traffic, no frees.
+ *   * HmrStr is a non-owning (pointer,len) view into either the raw packet or
+ *     the arena. It is valid until the arena is reset (end of packet). The
+ *     generated module must not free or retain an HmrStr across packets.
+ *   * All callbacks are reentrant across distinct HmrContext objects, enabling
+ *     one context (and arena) per worker thread with zero shared mutable state.
  */
 
 #ifndef HMR_RUNTIME_H
@@ -28,8 +34,12 @@
 extern "C" {
 #endif
 
-/* Bump on any incompatible change to the structs or callback signatures. */
-#define HMR_ABI_VERSION 1u
+/* Bump on any incompatible change to the structs or callback signatures.
+ * v2: zero-copy arena SIP model + match dispatch + field accessors. */
+#define HMR_ABI_VERSION 2u
+
+/* Maximum number of headers tracked per message (fixed, no heap). */
+#define HMR_MAX_HEADERS 32u
 
 /* Non-owning string view exchanged across the ABI. */
 typedef struct HmrStr {
@@ -37,8 +47,8 @@ typedef struct HmrStr {
     uint32_t    len;
 } HmrStr;
 
-/* Opaque handles. Their layout lives in the C++ runtime (SipMessage.hpp /
- * Runtime.hpp); the generated module only ever passes them through. */
+/* Opaque handles. Their layout lives in the C++ runtime (sip_message.hpp /
+ * context.hpp); the generated module only ever passes them through. */
 typedef struct HmrSipMsg  HmrSipMsg;
 typedef struct HmrContext HmrContext;
 
@@ -65,6 +75,19 @@ typedef enum HmrVarId {
     HMR_VAR_MAX
 } HmrVarId;
 
+/* Pre-extracted URI component fields (zero-copy slices into the raw packet,
+ * overridable via the arena). These are the hot elements HMR rules rewrite, so
+ * codegen can address them directly instead of re-parsing a header each time. */
+typedef enum HmrField {
+    HMR_FIELD_REQUEST_URI_USER = 0,
+    HMR_FIELD_REQUEST_URI_HOST = 1,
+    HMR_FIELD_FROM_USER        = 2,
+    HMR_FIELD_FROM_HOST        = 3,
+    HMR_FIELD_TO_USER          = 4,
+    HMR_FIELD_TO_HOST          = 5,
+    HMR_FIELD_MAX
+} HmrField;
+
 /* URI element selectors for hmr_rt_uri_get / hmr_rt_uri_set. Codegen maps the
  * AST ElementType onto these stable codes. */
 typedef enum HmrUriElement {
@@ -74,6 +97,18 @@ typedef enum HmrUriElement {
     HMR_URI_HOST    = 3,   /* host part */
     HMR_URI_PORT    = 4    /* port part */
 } HmrUriElement;
+
+/* match-val-type dispatch codes. Codegen selects the matcher with an immediate
+ * operand; the runtime routes to the specialized implementation (review #2). */
+typedef enum HmrMatchType {
+    HMR_MATCH_EXACT    = 0,   /* byte compare (strcmp) */
+    HMR_MATCH_EXACT_CI = 1,   /* ASCII case-insensitive compare */
+    HMR_MATCH_REGEX    = 2,   /* precompiled regex; uses regex_id, records caps */
+    HMR_MATCH_IP       = 3,   /* canonical IP equality (v4 & v6) */
+    HMR_MATCH_IP_MASK  = 4,   /* CIDR / dotted-netmask subnet membership */
+    HMR_MATCH_IP_RANGE = 5,   /* inclusive low-high range */
+    HMR_MATCH_FQDN     = 6    /* case-insensitive domain compare */
+} HmrMatchType;
 
 /* Result of hmr_apply: how the host should proceed with the message. */
 typedef enum HmrVerdict {
@@ -85,10 +120,11 @@ typedef enum HmrVerdict {
 /* ---- Runtime callbacks invoked by generated code ------------------------- */
 
 /* Header access. Names are case-insensitive per RFC 3261. get returns an empty
- * HmrStr (data may be NULL, len == 0) when the header is absent. */
-HmrStr hmr_rt_get_header(HmrSipMsg* msg, HmrStr name);
-int    hmr_rt_set_header(HmrSipMsg* msg, HmrStr name, HmrStr value);
-int    hmr_rt_add_header(HmrSipMsg* msg, HmrStr name, HmrStr value);
+ * HmrStr (data may be NULL, len == 0) when the header is absent. set/add write
+ * the value into the context arena, so `ctx` carries the storage. */
+HmrStr hmr_rt_get_header(const HmrSipMsg* msg, HmrStr name);
+int    hmr_rt_set_header(HmrSipMsg* msg, HmrContext* ctx, HmrStr name, HmrStr value);
+int    hmr_rt_add_header(HmrSipMsg* msg, HmrContext* ctx, HmrStr name, HmrStr value);
 int    hmr_rt_delete_header(HmrSipMsg* msg, HmrStr name);
 
 /* Request-line / status accessors used by element rules. */
@@ -96,11 +132,21 @@ HmrStr hmr_rt_get_method(const HmrSipMsg* msg);
 int    hmr_rt_is_request(const HmrSipMsg* msg);
 uint32_t hmr_rt_status_code(const HmrSipMsg* msg);
 
-/* Comparison primitives (return 1 on match, 0 otherwise). The pattern-rule
- * path uses precompiled regexes referenced by their table index; on a match it
- * records capture groups into the context for later $N back-references. */
+/* Pre-extracted URI component fields (HmrField). get returns the arena override
+ * if set, else the original slice; set writes `value` into the arena. */
+HmrStr hmr_rt_get_field(const HmrSipMsg* msg, uint32_t field);
+int    hmr_rt_set_field(HmrSipMsg* msg, HmrContext* ctx, uint32_t field, HmrStr value);
+
+/* Comparison primitives (return 1 on match, 0 otherwise). */
 int hmr_rt_str_eq(HmrStr a, HmrStr b, int case_insensitive);
 int hmr_rt_regex_match(HmrContext* ctx, uint32_t regex_id, HmrStr subject);
+
+/* Unified match-val-type dispatch. For HMR_MATCH_REGEX, `regex_id` selects the
+ * precompiled pattern (captures recorded into ctx) and `pattern` is ignored;
+ * for every other type `pattern` is the literal match-value and `regex_id` is
+ * ignored. Routes to the specialized matcher (matchers.hpp). */
+int hmr_rt_match(HmrContext* ctx, uint32_t match_type, HmrStr subject,
+                 HmrStr pattern, uint32_t regex_id);
 
 /* Capture / variable / stored-slot access. */
 HmrStr hmr_rt_get_capture(const HmrContext* ctx, uint32_t index);
@@ -118,7 +164,8 @@ void   hmr_rt_val_append_slot(HmrContext* ctx, uint32_t slot);
 HmrStr hmr_rt_val_finish(HmrContext* ctx);
 
 /* URI element access on a header value (e.g. From/To/Request-URI). Returns the
- * requested component; replace rewrites it and returns the rebuilt header. */
+ * requested component; replace rewrites it (into the arena) and returns the
+ * rebuilt header. */
 HmrStr hmr_rt_uri_get(HmrContext* ctx, HmrStr header_value, uint32_t element_type);
 HmrStr hmr_rt_uri_set(HmrContext* ctx, HmrStr header_value, uint32_t element_type,
                       HmrStr new_value);

@@ -117,6 +117,9 @@ hmr_frontend_dep = declare_dependency(
 # ---------------------------------------------------------------------------
 hmr_runtime_sources = [
   'src/runtime/matchers.cpp',
+  'src/runtime/uri.cpp',
+  'src/runtime/sip_message.cpp',
+  'src/runtime/runtime.cpp',
 ]
 
 libhmr_runtime = static_library('hmr_runtime',

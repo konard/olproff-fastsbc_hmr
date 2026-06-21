@@ -16,6 +16,11 @@ test_matchers = executable('test_matchers', 'test_matchers.cpp',
   cpp_args: hmr_warn_args)
 test('matchers', test_matchers, suite: 'unit')
 
+test_runtime = executable('test_runtime', 'test_runtime.cpp',
+  dependencies: hmr_runtime_dep,
+  cpp_args: hmr_warn_args)
+test('runtime', test_runtime, suite: 'unit')
+
 samples_dir = meson.current_source_dir() / 'hmr_samples'
 
 valid_samples = [
