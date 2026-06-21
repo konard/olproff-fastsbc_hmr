@@ -35,6 +35,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(HMR_ENABLE_LLVM "Build the LLVM-backed codegen/backend layers" ON)
 option(HMR_BUILD_TESTS "Build the test suite" ON)
 option(HMR_BUILD_BENCHMARKS "Build micro-benchmarks" ON)
+option(HMR_BUILD_EXAMPLES "Build the examples (LLVM only)" ON)
 option(HMR_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 
 add_library(hmr_warnings INTERFACE)
@@ -60,6 +61,9 @@ add_library(hmr_core STATIC
 )
 target_include_directories(hmr_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+# Propagate the C++23 requirement to consumers (e.g. a standalone example whose
+# own target scope would otherwise fall back to the compiler default standard).
+target_compile_features(hmr_core PUBLIC cxx_std_23)
 target_link_libraries(hmr_core PRIVATE hmr_warnings)
 
 # ---------------------------------------------------------------------------
@@ -125,6 +129,11 @@ endif()
 
 if(HMR_BUILD_BENCHMARKS)
   add_subdirectory(benchmarks)
+endif()
+
+# Examples depend on the LLVM-backed pipeline Facade (the `compile` path).
+if(HMR_BUILD_EXAMPLES AND HMR_HAVE_LLVM)
+  add_subdirectory(examples/host_integration)
 endif()
 
 # ---------------------------------------------------------------------------
