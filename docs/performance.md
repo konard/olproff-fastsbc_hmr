@@ -37,7 +37,7 @@ path; both use the same runtime.
 * **vs the interpreter.** The same optimized AST is run by the tree-walking
   [interpreter](../src/interp/interpreter.cpp) (the reference oracle) and by the
   compiled `.so`. The compiled module is ≈ 1.8× faster per packet, and the
-  differential test ([`tests/test_interp_vs_compiled.cpp`](../tests/test_interp_vs_compiled.cpp))
+  differential test ([`tests/test_interp.cpp`](../tests/test_interp.cpp))
   asserts they produce byte-identical output — so the speedup is real work, not a
   semantic shortcut.
 * **vs the "GCC approach."** The [C++ source generator](../src/codegen/cpp_generator.cpp)
