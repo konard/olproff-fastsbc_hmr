@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "llvm/AsmParser/Parser.h"
+#include "llvm/Config/llvm-config.h"  // LLVM_VERSION_MAJOR
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -70,6 +71,15 @@ OptimizationLevel to_level(unsigned o) {
         default: return OptimizationLevel::O3;
     }
 }
+
+// `CodeGenFileType` became a scoped enum in LLVM 18; the old unscoped
+// `CGFT_ObjectFile` spelling was dropped. Select the right enumerator so the
+// backend builds against LLVM 17 and 18 alike (both are documented as supported).
+#if LLVM_VERSION_MAJOR >= 18
+constexpr CodeGenFileType kObjectFileType = CodeGenFileType::ObjectFile;
+#else
+constexpr CodeGenFileType kObjectFileType = CodeGenFileType::CGFT_ObjectFile;
+#endif
 
 // A parsed, target-configured, fully optimized module bundled with everything
 // that must outlive it. Members are declared context-first so destruction runs
@@ -175,7 +185,7 @@ Result<ObjectCode> Backend::compile_to_object(const std::string& llvm_ir,
     raw_svector_ostream obj_stream(buffer);
     legacy::PassManager codegen_pm;
     if (opt->tm->addPassesToEmitFile(codegen_pm, obj_stream, /*DwoOut=*/nullptr,
-                                     CodeGenFileType::ObjectFile)) {
+                                     kObjectFileType)) {
         return make_error("backend: target cannot emit object files");
     }
     codegen_pm.run(*opt->module);

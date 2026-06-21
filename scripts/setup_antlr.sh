@@ -48,13 +48,33 @@ if [ ! -f "$LIBDIR/libantlr4-runtime.a" ]; then
     rm -rf "$work" && mkdir -p "$work"
     fetch "$SRC_URL" "$PREFIX/runtime-src.zip"
     unzip -q -o "$PREFIX/runtime-src.zip" -d "$work"
+    # Build only the static runtime — that's the lib Meson links
+    # (libantlr4-runtime.a), and skipping the shared target halves the work and
+    # the peak memory of this build.
     cmake -S "$work" -B "$work/build" \
         -DCMAKE_BUILD_TYPE=Release \
         -DANTLR4_INSTALL=ON \
         -DANTLR_BUILD_CPP_TESTS=OFF \
+        -DANTLR_BUILD_SHARED=OFF \
         -DWITH_DEMO=OFF \
         -DCMAKE_INSTALL_PREFIX="$INSTALL" >/dev/null
-    cmake --build "$work/build" --parallel >/dev/null
+    # The runtime's translation units are template-heavy; compiling on every
+    # core can exhaust RAM and get the build OOM-killed (SIGTERM / exit 143) on
+    # CI runners. Cap the job count by available memory (~2 GB/job), still
+    # honouring an explicit ANTLR_BUILD_JOBS override.
+    jobs="${ANTLR_BUILD_JOBS:-}"
+    if [ -z "$jobs" ]; then
+        ncpu="$(nproc 2>/dev/null || echo 2)"
+        memkb="$(awk '/^MemAvailable:/ { print $2; exit }' /proc/meminfo 2>/dev/null || echo 0)"
+        jobs="$ncpu"
+        if [ "$memkb" -gt 0 ]; then
+            memjobs=$(( memkb / 2000000 ))
+            [ "$memjobs" -lt 1 ] && memjobs=1
+            [ "$memjobs" -lt "$ncpu" ] && jobs="$memjobs"
+        fi
+    fi
+    echo "setup_antlr: compiling static runtime with -j$jobs" >&2
+    cmake --build "$work/build" --parallel "$jobs" >/dev/null
     cmake --install "$work/build" >/dev/null
 fi
 
