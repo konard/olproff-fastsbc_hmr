@@ -23,6 +23,13 @@ OUTDIR="$3"
 
 mkdir -p "$OUTDIR"
 
+# Resolve both paths to absolute form. ANTLR only writes its output FLAT into
+# `-o OUTDIR` when the grammar is given as an ABSOLUTE path; with a relative
+# path it mirrors the grammar's parent directory under OUTDIR (which, for a
+# Meson @INPUT@ like "../grammar/Hmr.g4", would escape the build dir).
+OUTDIR=$(cd "$OUTDIR" && pwd)
+GRAMMAR="$(cd "$(dirname "$GRAMMAR")" && pwd)/$(basename "$GRAMMAR")"
+
 # Generate a C++ visitor parser (no listener) for the grammar.
 set -- -Dlanguage=Cpp -visitor -no-listener -o "$OUTDIR" "$GRAMMAR"
 

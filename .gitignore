@@ -1,6 +1,7 @@
 # Build directories
 /build/
 /build-*/
+/builddir/
 /cmake-build-*/
 out/
 .cache/
@@ -13,8 +14,13 @@ CTestTestfile.cmake
 Testing/
 compile_commands.json
 
-# Generated ANTLR sources
+# Generated ANTLR sources (built into the build dir; guard against stray
+# in-tree generation if a tool is run by hand with the wrong output path).
 /grammar/generated/
+/grammar/Hmr*.cpp
+/grammar/Hmr*.h
+/grammar/*.interp
+/grammar/*.tokens
 
 # Object files, libraries, binaries
 *.o

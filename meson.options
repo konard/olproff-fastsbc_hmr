@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+#
+# Build options for fastsbc_hmr (Meson). The ANTLR4 tool + C++ runtime are not
+# yet packaged on most distros, so their locations are passed explicitly. Use
+# scripts/setup_antlr.sh to fetch/build a pinned copy and print these paths.
+
+option('antlr_jar', type: 'string', value: '',
+       description: 'Path to antlr-<ver>-complete.jar, or "antlr4" for a PATH wrapper')
+option('antlr_inc', type: 'string', value: '',
+       description: 'ANTLR4 C++ runtime include dir (…/include/antlr4-runtime)')
+option('antlr_libdir', type: 'string', value: '',
+       description: 'Directory containing libantlr4-runtime.{a,so}')
+
+option('enable_llvm', type: 'boolean', value: true,
+       description: 'Build the LLVM-backed codegen/backend/module/pipeline layers')
+option('build_tests', type: 'boolean', value: true,
+       description: 'Build the unit + sample tests')
+option('build_benchmarks', type: 'boolean', value: true,
+       description: 'Build the micro-benchmarks')
+option('build_examples', type: 'boolean', value: true,
+       description: 'Build the host-integration example (requires LLVM)')
