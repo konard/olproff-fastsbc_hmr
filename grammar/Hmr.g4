@@ -1,248 +1,139 @@
 // SPDX-License-Identifier: MIT
 //
-// Hmr.g4 — ANTLR4 grammar for the Oracle SBC "Header Manipulation Rules" (HMR)
-// configuration DSL, as implemented by fastsbc_hmr.
+// Hmr.g4 — ANTLR4 grammar for the Oracle SBC Header Manipulation Rules (HMR)
+// configuration DSL (Oracle Communications Session Border Controller 10.1.0,
+// the "sip-manipulation" element family).
 //
-// This grammar is the *specification* of the surface syntax. The production
-// engine does not run ANTLR at build time: the reference front-end is a
-// hand-written, indentation-aware lexer (src/parser/Lexer.cpp) feeding a
-// recursive-descent parser (src/parser/Parser.cpp). Every rule below mirrors a
-// function in that parser, so the two stay in lock-step and this file can be
-// fed to `antlr4 Hmr.g4` to generate an independent reference parser or to
-// drive editor tooling / syntax highlighting.
+// This grammar is the *single source of truth* for the parser. The build runs
 //
-// ----------------------------------------------------------------------------
-// Indentation sensitivity
-// ----------------------------------------------------------------------------
-// HMR is an off-side-rule (Python-like) language: block structure is expressed
-// purely through leading whitespace, not braces. The reference lexer therefore
-// synthesises three virtual tokens that a plain ANTLR lexer cannot emit on its
-// own:
+//     antlr4 -Dlanguage=Cpp -visitor -no-listener -o generated grammar/Hmr.g4
 //
-//     INDENT   leading whitespace of a line is strictly greater than the
-//              enclosing block's column  -> open a new block
-//     DEDENT   leading whitespace is less than the current block's column ->
-//              close one block per popped level; an in-between column that
-//              matches no open level is an error (see invalid_bad_indent.hmr)
-//     NEWLINE  logical end of a non-blank, non-comment line
-//
-// A tab advances to the next multiple of 8 columns. Blank lines and
-// comment-only lines do not participate in indentation tracking.
-//
-// To run this grammar through ANTLR you must wrap the generated lexer with a
-// "denter" that turns the WS/NEWLINE stream into INDENT/DEDENT/NEWLINE tokens
-// (e.g. antlr-denter, or a Python-style token-stream rewriter). The reference
-// C++ lexer already does exactly this; see Lexer::tokenize / Lexer::lexLine.
+// and compiles the generated HmrLexer/HmrParser against the ANTLR4 C++ runtime;
+// hmr::parser::Parser is a thin visitor over the resulting parse tree
+// (see src/parser/parser.cpp).
 //
 // ----------------------------------------------------------------------------
-// Keywords are contextual, not reserved
+// Block structure is keyword-delimited, NOT indentation-sensitive
 // ----------------------------------------------------------------------------
-// The reference lexer has no keyword tokens at all: every unquoted run of
-// non-whitespace is a single WORD, and the parser decides whether a WORD is a
-// structural keyword or an attribute value by *position*. Consequently a value
-// may legally be spelled like a keyword (e.g. `new-value name`). We preserve
-// that property here: keyword literals are admitted by the `value` rule via the
-// `keyword` alias, so no word is ever reserved away from the value position.
+// Oracle's ACLI renders configuration as blocks introduced by distinct,
+// non-overlapping keywords (sip-manipulation / header-rule / element-rule /
+// mime-*-rule) whose bodies are a flat sequence of `key value` attribute lines.
+// A block ends when the next line opens a sibling/parent block keyword, or at
+// end of input. ANTLR therefore resolves block boundaries purely by keyword
+// lookahead and horizontal whitespace is insignificant — indentation is purely
+// cosmetic. This matches how the SBC actually emits and re-reads config.
+//
+// ----------------------------------------------------------------------------
+// Keywords are reserved only at the start of a line
+// ----------------------------------------------------------------------------
+// Only block-introducer and attribute-key keywords are reserved lexemes. Every
+// other lexeme — enum values (case-sensitive, uri-host, request, ...),
+// variables ($LOCAL_IP), regexes, IP literals, header names — is a WORD that the
+// AST factory classifies later. A value may still legally be spelled like a
+// keyword (e.g. `new-value name`): the `keywordAsValue` rule re-admits every
+// reserved word in value position, so no word is reserved away from values.
+// Empty attribute values (`key` alone on a line) are valid Oracle config.
 
 grammar Hmr;
 
-// INDENT / DEDENT are emitted by the denter (see indentation note above), never
-// matched from raw text. They are declared here so the parser rules can
-// reference them; ANTLR requires the tokens{} section in the grammar prequel.
-tokens { INDENT, DEDENT }
+// ===========================================================================
+// Parser rules
+// ===========================================================================
 
-// =====================================================================
-// Parser rules  (mirror src/parser/Parser.cpp)
-// =====================================================================
+// A configuration is zero or more sip-manipulation sets. Leading blank lines and
+// comment-only lines (which the lexer collapses into NEWLINE tokens) are
+// tolerated.
+unit : NEWLINE* manipulation* EOF ;
 
-// Parser::parse -> parseRuleset. A unit is exactly one sip-manipulation set.
-unit
-    : NEWLINE* ruleset EOF
+manipulation
+    : KW_SIP_MANIPULATION value? NEWLINE manipItem*
     ;
 
-// Parser::parseRuleset
-ruleset
-    : KW_SIP_MANIPULATION inlineName? NEWLINE
-      ( INDENT rulesetItem* DEDENT )?
-    ;
-
-rulesetItem
+manipItem
     : headerRule
-    | rulesetAttr
+    | mimeRule
+    | attribute
+    | NEWLINE      // blank / comment-only line inside the block
     ;
 
-// Scalar attributes accepted directly under sip-manipulation. Unknown keys are
-// accepted and ignored with a warning by the reference parser, hence the
-// `genericAttr` fallback.
-rulesetAttr
-    : KW_NAME           value  NEWLINE
-    | KW_DESCRIPTION    value  NEWLINE
-    | KW_IMPORT         value  NEWLINE
-    | KW_EXPORT         value  NEWLINE
-    | KW_SPLIT_HEADERS  value  NEWLINE   // legacy / deprecated
-    | KW_JOIN_HEADERS   value  NEWLINE   // legacy / deprecated
-    | genericAttr
+// mime-rule / mime-isup-rule / mime-sdp-rule share the header-rule body shape.
+// Recognized for Oracle compatibility; the visitor reports them as unsupported
+// and skips their bodies (the compiler targets the SIP header/element rules).
+mimeRule
+    : (KW_MIME_RULE | KW_MIME_ISUP_RULE | KW_MIME_SDP_RULE) value? NEWLINE headerRuleItem*
     ;
 
-// Parser::parseHeaderRule
 headerRule
-    : KW_HEADER_RULE inlineName? NEWLINE
-      ( INDENT headerRuleItem* DEDENT )?
+    : KW_HEADER_RULE value? NEWLINE headerRuleItem*
     ;
 
 headerRuleItem
     : elementRule
-    | headerRuleAttr
+    | attribute
+    | NEWLINE
     ;
 
-headerRuleAttr
-    : KW_NAME            value         NEWLINE
-    | KW_HEADER_NAME     value         NEWLINE
-    | KW_ACTION          headerAction  NEWLINE
-    | KW_COMPARISON_TYPE comparison    NEWLINE
-    | KW_MSG_TYPE        msgType       NEWLINE
-    | KW_METHODS         methodList    NEWLINE
-    | KW_MATCH_VALUE     value         NEWLINE
-    | KW_NEW_VALUE       value         NEWLINE
-    | genericAttr
-    ;
-
-// Parser::parseElementRule
 elementRule
-    : KW_ELEMENT_RULE inlineName? NEWLINE
-      ( INDENT elementRuleItem* DEDENT )?
+    : KW_ELEMENT_RULE value? NEWLINE elementRuleItem*
     ;
 
 elementRuleItem
-    : elementRuleAttr
+    : attribute
+    | NEWLINE
     ;
 
-elementRuleAttr
-    : KW_NAME            value         NEWLINE
-    | KW_PARAMETER_NAME  value         NEWLINE
-    | KW_TYPE            elementType   NEWLINE
-    | KW_ACTION          elementAction NEWLINE
-    | KW_MATCH_VAL_TYPE  matchValType  NEWLINE
-    | KW_COMPARISON_TYPE comparison    NEWLINE
-    | KW_MATCH_VALUE     value         NEWLINE
-    | KW_NEW_VALUE       value         NEWLINE
-    | genericAttr
+// A `key value?` line. The value is optional (Oracle permits empty values) and
+// is terminated by end of line.
+attribute
+    : key value? NEWLINE
     ;
 
-// Optional inline name token right after a block keyword
-// (e.g. `header-rule anonFromHost`). Most configs put `name` on its own line.
-inlineName
-    : value
+// Recognized attribute keys plus a catch-all (WORD) so unknown / forward-compat
+// attributes parse and are reported as warnings by the visitor instead of
+// aborting the parse (error recovery).
+key
+    : KW_NAME | KW_DESCRIPTION | KW_HEADER_NAME | KW_ACTION
+    | KW_COMPARISON_TYPE | KW_MSG_TYPE | KW_METHODS | KW_MATCH_VALUE
+    | KW_NEW_VALUE | KW_PARAMETER_NAME | KW_TYPE | KW_MATCH_VAL_TYPE
+    | KW_SPLIT_HEADERS | KW_JOIN_HEADERS | KW_IMPORT | KW_EXPORT
+    | WORD
     ;
 
-// Any otherwise-unrecognised `key value` line. The reference parser warns and
-// ignores it rather than failing, so editors should treat it as benign.
-genericAttr
-    : valueAtom value? NEWLINE
-    ;
-
-// ---- enumerated attribute values (AstFactory lookup tables) ----------------
-
-headerAction
-    : ( KW_NONE | KW_ADD | KW_STORE | KW_MANIPULATE | KW_REPLACE
-      | KW_FIND_REPLACE_ALL | KW_DELETE | KW_DELETE_ELEMENT | KW_DELETE_HEADER
-      | KW_SIP_MANIP | KW_LOG | KW_REJECT )
-    ;
-
-elementAction
-    : ( KW_NONE | KW_ADD | KW_STORE | KW_REPLACE | KW_DELETE_ELEMENT
-      | KW_DELETE_HEADER | KW_FIND_REPLACE_ALL | KW_SIP_MANIP | KW_LOG
-      | KW_REJECT )
-    ;
-
-elementType
-    : ( KW_HEADER_VALUE | KW_HEADER_PARAM_NAME | KW_HEADER_PARAM
-      | KW_URI_DISPLAY | KW_URI_USER | KW_URI_USER_PARAM | KW_URI_HOST
-      | KW_URI_PORT | KW_URI_PARAM_NAME | KW_URI_PARAM | KW_URI_HEADER_NAME
-      | KW_URI_HEADER | KW_STATUS_CODE | KW_REASON_PHRASE )
-    ;
-
-comparison
-    : ( KW_CASE_SENSITIVE | KW_CASE_INSENSITIVE | KW_PATTERN_RULE | KW_BOOLEAN
-      | KW_REFER_CASE_SENSITIVE | KW_REFER_CASE_INSENSITIVE )
-    ;
-
-matchValType
-    : ( KW_ANY | KW_AN | KW_IP | KW_FQDN )
-    ;
-
-msgType
-    : ( KW_ANY | KW_REQUEST | KW_REPLY | KW_OUT_OF_DIALOG )
-    ;
-
-// `methods INVITE,UPDATE` — comma/space separated SIP method tokens.
-methodList
-    : value
-    ;
-
-// ---- value (match-value / new-value / scalar text) -------------------------
-//
-// AstFactory/Value::parse treats the joined text of a value as a small
-// interpolation mini-language:
-//   * $NAME              context variable     ($LOCAL_IP, $TRUNK_GROUP, $REALM)
-//   * $0 $1 $2 ...       capture back-reference from a pattern-rule match
-//   * everything else    literal text; for a match-value the literal is a
-//                        regular expression (e.g. `internal\.local`,
-//                        `sip:1900[0-9]+@`)
-// These are lexically part of WORD/STRING, so they are not separate tokens
-// here; the interpolation is resolved in Value.cpp, not the grammar.
-value
-    : valueAtom+
-    ;
+// A value is one or more atoms on the same line. The visitor joins atom text and
+// hands it to ast::Value / ast::AstFactory for interpolation / enum mapping.
+value : valueAtom+ ;
 
 valueAtom
-    : WORD
-    | STRING
-    | keyword          // keywords are contextual: usable in value position
+    : WORD | STRING | keywordAsValue
     ;
 
-// Every keyword literal, re-exposed so it can appear as an ordinary value.
-keyword
+keywordAsValue
     : KW_SIP_MANIPULATION | KW_HEADER_RULE | KW_ELEMENT_RULE
-    | KW_NAME | KW_DESCRIPTION | KW_IMPORT | KW_EXPORT
-    | KW_SPLIT_HEADERS | KW_JOIN_HEADERS
-    | KW_HEADER_NAME | KW_ACTION | KW_COMPARISON_TYPE | KW_MSG_TYPE
-    | KW_METHODS | KW_MATCH_VALUE | KW_NEW_VALUE | KW_PARAMETER_NAME
-    | KW_TYPE | KW_MATCH_VAL_TYPE
-    | KW_NONE | KW_ADD | KW_STORE | KW_MANIPULATE | KW_REPLACE
-    | KW_FIND_REPLACE_ALL | KW_DELETE | KW_DELETE_ELEMENT | KW_DELETE_HEADER
-    | KW_SIP_MANIP | KW_LOG | KW_REJECT
-    | KW_HEADER_VALUE | KW_HEADER_PARAM_NAME | KW_HEADER_PARAM
-    | KW_URI_DISPLAY | KW_URI_USER | KW_URI_USER_PARAM | KW_URI_HOST
-    | KW_URI_PORT | KW_URI_PARAM_NAME | KW_URI_PARAM | KW_URI_HEADER_NAME
-    | KW_URI_HEADER | KW_STATUS_CODE | KW_REASON_PHRASE
-    | KW_CASE_SENSITIVE | KW_CASE_INSENSITIVE | KW_PATTERN_RULE | KW_BOOLEAN
-    | KW_REFER_CASE_SENSITIVE | KW_REFER_CASE_INSENSITIVE
-    | KW_ANY | KW_AN | KW_IP | KW_FQDN
-    | KW_REQUEST | KW_REPLY | KW_OUT_OF_DIALOG
+    | KW_MIME_RULE | KW_MIME_ISUP_RULE | KW_MIME_SDP_RULE
+    | KW_NAME | KW_DESCRIPTION | KW_HEADER_NAME | KW_ACTION
+    | KW_COMPARISON_TYPE | KW_MSG_TYPE | KW_METHODS | KW_MATCH_VALUE
+    | KW_NEW_VALUE | KW_PARAMETER_NAME | KW_TYPE | KW_MATCH_VAL_TYPE
+    | KW_SPLIT_HEADERS | KW_JOIN_HEADERS | KW_IMPORT | KW_EXPORT
     ;
 
-// =====================================================================
+// ===========================================================================
 // Lexer rules
-// =====================================================================
-//
-// IMPORTANT: keyword tokens are listed *before* WORD so an exact match wins the
-// ANTLR maximal-munch tie-break. A longer run (e.g. `uri-hostname`) still falls
-// through to WORD. This reproduces the reference parser's behaviour where an
-// exact keyword spelling is structural but any other word is a plain value.
+// ===========================================================================
+// Keyword tokens are listed before WORD so an exact spelling wins ANTLR's
+// maximal-munch tie-break, while a longer run (e.g. `header-named`, `X-Custom`)
+// still falls through to WORD.
 
-// ---- block keywords --------------------------------------------------------
+// ---- block-introducer keywords --------------------------------------------
 KW_SIP_MANIPULATION : 'sip-manipulation' ;
-KW_HEADER_RULE      : 'header-rule' | 'header-rules' ;
-KW_ELEMENT_RULE     : 'element-rule' | 'element-rules' ;
+KW_HEADER_RULE      : 'header-rule'     | 'header-rules' ;
+KW_ELEMENT_RULE     : 'element-rule'    | 'element-rules' ;
+KW_MIME_RULE        : 'mime-rule'       | 'mime-rules' ;
+KW_MIME_ISUP_RULE   : 'mime-isup-rule'  | 'mime-isup-rules' ;
+KW_MIME_SDP_RULE    : 'mime-sdp-rule'   | 'mime-sdp-rules' ;
 
 // ---- attribute keys --------------------------------------------------------
 KW_NAME             : 'name' ;
 KW_DESCRIPTION      : 'description' ;
-KW_IMPORT           : 'import' ;
-KW_EXPORT           : 'export' ;
-KW_SPLIT_HEADERS    : 'split-headers' ;
-KW_JOIN_HEADERS     : 'join-headers' ;
 KW_HEADER_NAME      : 'header-name' ;
 KW_ACTION           : 'action' ;
 KW_COMPARISON_TYPE  : 'comparison-type' ;
@@ -253,85 +144,28 @@ KW_NEW_VALUE        : 'new-value' ;
 KW_PARAMETER_NAME   : 'parameter-name' ;
 KW_TYPE             : 'type' ;
 KW_MATCH_VAL_TYPE   : 'match-val-type' ;
-
-// ---- header / element actions ---------------------------------------------
-KW_NONE             : 'none' ;
-KW_ADD              : 'add' ;
-KW_STORE            : 'store' ;
-KW_MANIPULATE       : 'manipulate' ;
-KW_REPLACE          : 'replace' ;
-KW_FIND_REPLACE_ALL : 'find-replace-all' ;
-KW_DELETE           : 'delete' ;
-KW_DELETE_ELEMENT   : 'delete-element' ;
-KW_DELETE_HEADER    : 'delete-header' ;
-KW_SIP_MANIP        : 'sip-manip' ;
-KW_LOG              : 'log' ;
-KW_REJECT           : 'reject' ;
-
-// ---- element types ---------------------------------------------------------
-KW_HEADER_VALUE      : 'header-value' ;
-KW_HEADER_PARAM_NAME : 'header-param-name' ;
-KW_HEADER_PARAM      : 'header-param' ;
-KW_URI_DISPLAY       : 'uri-display' ;
-KW_URI_USER          : 'uri-user' ;
-KW_URI_USER_PARAM    : 'uri-user-param' ;
-KW_URI_HOST          : 'uri-host' ;
-KW_URI_PORT          : 'uri-port' ;
-KW_URI_PARAM_NAME    : 'uri-param-name' ;
-KW_URI_PARAM         : 'uri-param' ;
-KW_URI_HEADER_NAME   : 'uri-header-name' ;
-KW_URI_HEADER        : 'uri-header' ;
-KW_STATUS_CODE       : 'status-code' ;
-KW_REASON_PHRASE     : 'reason-phrase' ;
-
-// ---- comparison types ------------------------------------------------------
-KW_CASE_SENSITIVE        : 'case-sensitive' ;
-KW_CASE_INSENSITIVE      : 'case-insensitive' ;
-KW_PATTERN_RULE          : 'pattern-rule' ;
-KW_BOOLEAN               : 'boolean' ;
-KW_REFER_CASE_SENSITIVE  : 'refer-case-sensitive' ;
-KW_REFER_CASE_INSENSITIVE: 'refer-case-insensitive' ;
-
-// ---- match-val-type / msg-type --------------------------------------------
-KW_ANY           : 'any' ;
-KW_AN            : 'an' ;     // tolerated truncation of "any" in legacy configs
-KW_IP            : 'ip' ;
-KW_FQDN          : 'fqdn' ;
-KW_REQUEST       : 'request' ;
-KW_REPLY         : 'reply' ;
-KW_OUT_OF_DIALOG : 'out-of-dialog' ;
+KW_SPLIT_HEADERS    : 'split-headers' ;
+KW_JOIN_HEADERS     : 'join-headers' ;
+KW_IMPORT           : 'import' ;
+KW_EXPORT           : 'export' ;
 
 // ---- structural & literal tokens ------------------------------------------
 
-// A double-quoted string with simple backslash escapes (\n \t \r \" \\).
-STRING
-    : '"' ( '\\' . | ~["\\\r\n] )* '"'
-    ;
+// Double-quoted string with simple backslash escapes (\n \t \r \" \\).
+STRING  : '"' ( '\\' . | ~["\\\r\n] )* '"' ;
 
-// A bareword: a maximal run of non-whitespace that does not *start* with '#'
-// (which would begin a comment) or '"' (which would begin a string). Hyphens,
-// dots, ':', '$', '@', regex metacharacters, etc. are all ordinary word chars,
-// matching the reference lexer's "stop only at space/tab" rule.
-WORD
-    : ~[ \t\r\n#"] ~[ \t\r\n]*
-    ;
+// A bareword: a maximal run of non-whitespace not starting with '#' (comment) or
+// '"' (string). Hyphens, dots, ':', '$', '@', regex metacharacters, '/' (CIDR)
+// are ordinary word characters.
+WORD    : ~[ \t\r\n#"] ~[ \t\r\n]* ;
 
-// '#' to end of line is a comment, but only when '#' begins a token (i.e. it is
-// preceded by whitespace or starts the line); a '#' embedded in a WORD is part
-// of the word. Because WORD cannot start with '#', a stand-alone '#' lands here.
-COMMENT
-    : '#' ~[\r\n]* -> skip
-    ;
+// '#' to end of line is a comment. WORD cannot start with '#', so a stand-alone
+// '#' lands here; a '#' embedded in a WORD stays part of the word.
+COMMENT : '#' ~[\r\n]* -> skip ;
 
-// NEWLINE is significant (it terminates each attribute line and block header).
-// A denter post-processes the WS around newlines into INDENT/DEDENT tokens; see
-// the indentation note at the top of this file.
-NEWLINE
-    : ( '\r'? '\n' )+
-    ;
+// NEWLINE is significant: it terminates every attribute line and block header.
+// Consecutive newlines (blank lines) collapse into one token.
+NEWLINE : ( '\r'? '\n' )+ ;
 
-// Horizontal whitespace is consumed by the denter for indentation accounting
-// and is otherwise insignificant between tokens on a line.
-WS
-    : [ \t]+ -> skip
-    ;
+// Horizontal whitespace is insignificant between tokens.
+WS      : [ \t]+ -> skip ;
