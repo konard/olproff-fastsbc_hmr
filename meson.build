@@ -147,6 +147,24 @@ hmr_optimizer_dep = declare_dependency(
   dependencies: hmr_frontend_dep)
 
 # ---------------------------------------------------------------------------
+# hmr_interp — AST tree-walking interpreter that mirrors the IR generator. It
+# drives the same hmr_rt_* runtime as a compiled module, so it is both the
+# baseline for the "compiled vs interpreter" benchmark and the differential
+# oracle for the fuzzer. No LLVM dependency (front-end + runtime only), so it is
+# always available, even in a no-LLVM build.
+# ---------------------------------------------------------------------------
+libhmr_interp = static_library('hmr_interp',
+  'src/interp/interpreter.cpp',
+  include_directories: hmr_inc,
+  dependencies: [hmr_frontend_dep, hmr_runtime_dep],
+  cpp_args: hmr_warn_args)
+
+hmr_interp_dep = declare_dependency(
+  include_directories: hmr_inc,
+  link_with: libhmr_interp,
+  dependencies: [hmr_frontend_dep, hmr_runtime_dep])
+
+# ---------------------------------------------------------------------------
 # LLVM-backed layers — codegen (AST → IR), backend (IR → object), module
 # loader (dlopen + RCU hot-swap) and the pipeline Facade. The front-end CLI
 # subcommands work without LLVM; `dump-ir`/`compile` need it, so they are gated

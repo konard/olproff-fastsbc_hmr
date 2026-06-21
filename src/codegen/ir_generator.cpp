@@ -37,6 +37,7 @@
 #include "llvm/TargetParser/Host.h"
 
 #include "hmr/ast/ast_factory.hpp"
+#include "hmr/codegen/lowering.hpp"
 #include "hmr/runtime/hmr_runtime.h"
 
 namespace hmr::codegen {
@@ -63,52 +64,11 @@ struct IrStr {
     llvm::Value* len;   // i32
 };
 
-// Map a built-in variable name ($LOCAL_IP, ...) to its stable HmrVarId. Unknown
-// names resolve to HMR_VAR_NONE, which the runtime reports as the empty string.
-HmrVarId variable_id(std::string_view name) {
-    std::string up;
-    up.reserve(name.size());
-    for (char c : name) up.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
-    static const std::map<std::string, HmrVarId> kMap = {
-        {"LOCAL_IP", HMR_VAR_LOCAL_IP},     {"REMOTE_IP", HMR_VAR_REMOTE_IP},
-        {"LOCAL_PORT", HMR_VAR_LOCAL_PORT}, {"REMOTE_PORT", HMR_VAR_REMOTE_PORT},
-        {"TRUNK_GROUP", HMR_VAR_TRUNK_GROUP}, {"REALM", HMR_VAR_REALM},
-        {"INTERFACE", HMR_VAR_INTERFACE},   {"METHOD", HMR_VAR_METHOD},
-        {"RURI_USER", HMR_VAR_RURI_USER},   {"RURI_HOST", HMR_VAR_RURI_HOST},
-        {"TO_USER", HMR_VAR_TO_USER},       {"TO_HOST", HMR_VAR_TO_HOST},
-        {"FROM_USER", HMR_VAR_FROM_USER},   {"FROM_HOST", HMR_VAR_FROM_HOST},
-    };
-    auto it = kMap.find(up);
-    return it == kMap.end() ? HMR_VAR_NONE : it->second;
-}
-
-// Map an element-rule type to a URI element selector. Returns nullopt for
-// element kinds the v1 generator does not yet manipulate (params, etc.).
-std::optional<uint32_t> uri_element(ElementType t) {
-    switch (t) {
-        case ElementType::HeaderValue: return HMR_URI_WHOLE;
-        case ElementType::UriDisplay:  return HMR_URI_DISPLAY;
-        case ElementType::UriUser:     return HMR_URI_USER;
-        case ElementType::UriHost:     return HMR_URI_HOST;
-        case ElementType::UriPort:     return HMR_URI_PORT;
-        default:                       return std::nullopt;
-    }
-}
-
-bool is_case_insensitive(ComparisonType c) {
-    return c == ComparisonType::CaseInsensitive ||
-           c == ComparisonType::ReferCaseInsensitive;
-}
-bool is_pattern(ComparisonType c) { return c == ComparisonType::PatternRule; }
-
-// Choose the IP matcher variant from the literal's shape: a '/' means a CIDR /
-// dotted-netmask subnet, a '-' (with no '/') means an inclusive low-high range,
-// otherwise a single address. Mirrors the runtime matchers (matchers.hpp).
-uint32_t ip_match_type(std::string_view pat) {
-    if (pat.find('/') != std::string_view::npos) return HMR_MATCH_IP_MASK;
-    if (pat.find('-') != std::string_view::npos) return HMR_MATCH_IP_RANGE;
-    return HMR_MATCH_IP;
-}
+// The pure AST → runtime-immediate mappings (variable_id, uri_element,
+// is_case_insensitive, is_pattern, ip_match_type) live in codegen/lowering.hpp
+// so the interpreter oracle (src/interp/interpreter.cpp) lowers identically.
+// They are declared in this namespace (hmr::codegen), so the unqualified calls
+// below resolve to them.
 
 // ---------------------------------------------------------------------------
 // Emitter — builds the module via IRBuilder, walking the AST in Visitor order.
@@ -272,9 +232,11 @@ private:
         auto [it, ins] = slots_.try_emplace(name, static_cast<unsigned>(slots_.size()));
         return it->second;
     }
-    unsigned slot_for_ref(const std::string& path) {
-        std::string base = path.substr(0, path.find('.'));
-        return slot_for(base);
+    // Resolve a `$rule.$N` back-reference to the slot the matching pattern-rule
+    // store wrote: group N of the base rule (N defaults to 0 -> the whole match).
+    unsigned slot_for_ref(const std::string& path, int capture_index) {
+        return slot_for(capture_slot_key(
+            ref_base_name(path), static_cast<unsigned>(std::max(0, capture_index))));
     }
 
     // --- control-flow helpers ---------------------------------------------
@@ -339,7 +301,7 @@ IrStr Emitter::emit_value(const Value& v) {
             case RefKind::Capture:
                 return rt_get_capture(static_cast<unsigned>(std::max(0, ref.capture_index)));
             case RefKind::RuleRef:
-                return rt_load(slot_for_ref(ref.name));
+                return rt_load(slot_for_ref(ref.name, ref.capture_index));
         }
     }
 
@@ -358,7 +320,7 @@ IrStr Emitter::emit_value(const Value& v) {
                 rt_val_append_capture(static_cast<unsigned>(std::max(0, seg.ref.capture_index)));
                 break;
             case RefKind::RuleRef:
-                rt_val_append_slot(slot_for_ref(seg.ref.name));
+                rt_val_append_slot(slot_for_ref(seg.ref.name, seg.ref.capture_index));
                 break;
         }
     }
@@ -426,11 +388,22 @@ bool Emitter::emit_header_action(const HeaderRule& hr, std::size_t idx, IrStr hv
             rt_delete_header(name);
             return false;
         case HeaderAction::Store: {
-            unsigned slot = slot_for(hr.name.empty() ? ("rule" + std::to_string(idx)) : hr.name);
-            if (is_pattern(hr.comparison))
-                rt_store(slot, rt_get_capture(0));
-            else
-                rt_store(slot, have_hv ? hv : rt_get_header(name));
+            const std::string rule =
+                hr.name.empty() ? ("rule" + std::to_string(idx)) : hr.name;
+            if (is_pattern(hr.comparison)) {
+                // Pattern-rule store: capture the whole match (group 0, keyed by
+                // the bare rule name) *and* each sub-group under "rule.$N", so a
+                // later $rule.$N back-reference loads group N (Oracle HMR). The
+                // match-value's regex fixes how many groups exist.
+                const std::string pat = hr.match_value.is_pure_literal()
+                                            ? hr.match_value.literal_text()
+                                            : std::string{hr.match_value.raw()};
+                unsigned ngroups = count_capturing_groups(pat);
+                for (unsigned g = 0; g <= ngroups; ++g)
+                    rt_store(slot_for(capture_slot_key(rule, g)), rt_get_capture(g));
+            } else {
+                rt_store(slot_for(rule), have_hv ? hv : rt_get_header(name));
+            }
             return false;
         }
         case HeaderAction::Log:
