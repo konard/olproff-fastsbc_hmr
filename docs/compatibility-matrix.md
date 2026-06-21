@@ -75,18 +75,21 @@ miscompiled.
 
 ## `comparison-type`
 
-All comparison types lower to a **precompiled regex** guard
-(`hmr_rt_regex_match`) — see
-[why match-values are always regexes](./runtime-api.md#why-match-values-are-always-regexes).
+Each comparison-type selects a **specialized matcher** dispatched through
+`hmr_rt_match`; only `pattern-rule` uses the regex engine — see
+[how match-values are lowered](./runtime-api.md#how-match-values-are-lowered).
 
-| Comparison | Status | Notes |
+| Comparison | Status | Lowers to |
 |---|---|---|
-| `case-sensitive` | ✅ | regex, case-sensitive |
-| `case-insensitive` | ✅ | regex, case-insensitive flag |
-| `pattern-rule` | ✅ | regex; also exposes captures `$0..$N` |
-| `refer-case-sensitive` | ✅ | treated as a case-sensitive regex |
-| `refer-case-insensitive` | ✅ | treated as a case-insensitive regex |
-| `boolean` | 🟡 | a literal regex still matches; a `$`-reference boolean expression is treated as always-true (documented v1 gap) |
+| `case-sensitive` | ✅ | exact byte compare (`HMR_MATCH_EXACT`) |
+| `case-insensitive` | ✅ | ASCII case-folded compare (`HMR_MATCH_EXACT_CI`) |
+| `pattern-rule` | ✅ | `std::regex` (`HMR_MATCH_REGEX`); also exposes captures `$0..$N` |
+| `refer-case-sensitive` | ✅ | treated as a case-sensitive exact compare |
+| `refer-case-insensitive` | ✅ | treated as a case-insensitive exact compare |
+| `boolean` | 🟡 | a literal still does an exact compare; a `$`-reference boolean expression is treated as always-true (documented v1 gap) |
+
+A non-`pattern-rule` comparison combined with `match-val-type ip` or `fqdn`
+routes to the IP / FQDN matcher instead of the exact compare (see below).
 
 ## `msg-type`
 
@@ -106,9 +109,18 @@ All comparison types lower to a **precompiled regex** guard
 
 ## `match-val-type`
 
-| Value | Status | Notes |
+The match-val-type selects a dedicated runtime matcher (except when the
+comparison-type is `pattern-rule`, which always wins and uses the regex engine):
+
+| Value | Status | Lowers to |
 |---|---|---|
-| `any` / `ip` / `fqdn` | 🟡 | parsed and validated; used as a hint, not enforced as a separate guard |
+| `any` | ✅ | the comparison-type's exact / regex matcher |
+| `ip` | ✅ | `HMR_MATCH_IP` / `HMR_MATCH_IP_MASK` / `HMR_MATCH_IP_RANGE`, chosen from the pattern shape (`addr`, `addr/prefix`, `lo-hi`) |
+| `fqdn` | ✅ | `HMR_MATCH_FQDN` (case-insensitive domain compare) |
+
+The IP and FQDN engines live in
+[`matchers.hpp`](../include/hmr/runtime/matchers.hpp) and are unit-tested in
+[`tests/test_matchers.cpp`](../tests/test_matchers.cpp).
 
 ## `new-value` expressions
 

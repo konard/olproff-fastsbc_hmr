@@ -8,8 +8,10 @@ module with the `hmrc` driver, and loading that module from a host.
 | Tool | Version | Needed for |
 |---|---|---|
 | C++ compiler | g++ 13+ / clang 17+ (C++23) | everything |
-| CMake | ≥ 3.24 | build system |
-| Ninja or Make | any | build |
+| [Meson](https://mesonbuild.com) | ≥ 1.1 | build system |
+| Ninja | any | build backend |
+| ANTLR4 | 4.13.x tool jar + C++ runtime | the generated lexer/parser (fetched by `scripts/setup_antlr.sh`) |
+| JRE | any | running the ANTLR4 tool jar |
 | LLVM | 17 or 18 (`llvm-dev`) | the code generator / `compile` |
 | `lld` | matching LLVM | optional faster linking |
 | `cc` (gcc/clang driver) | any | linking the `.so` (`-shared`) |
@@ -20,35 +22,49 @@ subcommands) builds with **no LLVM at all**. LLVM is only required for the
 
 ## Building
 
+ANTLR4 is not packaged on most distros, so a one-time helper fetches a pinned
+tool jar + C++ runtime and prints the three paths Meson needs:
+
+```sh
+eval "$(scripts/setup_antlr.sh)"   # exports ANTLR_JAR / ANTLR_INC / ANTLR_LIBDIR
+```
+
 ### Full build (with LLVM)
 ```sh
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_DIR="$(llvm-config-18 --cmakedir)" \
-  -DHMR_ENABLE_LLVM=ON
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+meson setup builddir \
+  -Dantlr_jar="$ANTLR_JAR" -Dantlr_inc="$ANTLR_INC" -Dantlr_libdir="$ANTLR_LIBDIR"
+meson compile -C builddir
+meson test    -C builddir
 ```
+
+The ANTLR4 C++ runtime is linked **statically** (`antlr_libdir` is searched for
+`libantlr4-runtime.a`), so the built binaries carry no ANTLR shared-library
+dependency and need no `LD_LIBRARY_PATH` at run time.
 
 ### Front-end-only build (no LLVM)
 ```sh
-cmake -S . -B build -G Ninja -DHMR_ENABLE_LLVM=OFF
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+meson setup builddir-fe -Denable_llvm=false \
+  -Dantlr_jar="$ANTLR_JAR" -Dantlr_inc="$ANTLR_INC" -Dantlr_libdir="$ANTLR_LIBDIR"
+meson compile -C builddir-fe
+meson test    -C builddir-fe
 ```
 
-If `-DHMR_ENABLE_LLVM=ON` is set but `find_package(LLVM)` fails, the build
-prints a warning and **degrades gracefully** to the front-end-only configuration
-rather than failing.
+With `-Denable_llvm=false` (or when no `llvm-config` is found) the build
+**degrades gracefully**: the four LLVM-gated libraries are skipped while the
+front end, runtime, optimizer, interpreter, C++ generator, and the front-end
+subcommands of `hmrc` still build and pass their tests.
 
 ### Build options
 
 | Option | Default | Effect |
 |---|---|---|
-| `HMR_ENABLE_LLVM` | `ON` | build the LLVM-backed codegen/backend/module/pipeline |
-| `HMR_BUILD_TESTS` | `ON` | build and register the test suite |
-| `HMR_BUILD_BENCHMARKS` | `ON` | build the micro-benchmarks |
-| `HMR_WARNINGS_AS_ERRORS` | `OFF` | add `-Werror` (CI turns this on) |
+| `enable_llvm` | `true` | build the LLVM-backed codegen/backend/module/pipeline |
+| `build_tests` | `true` | build and register the test suite |
+| `build_benchmarks` | `true` | build the micro-benchmarks |
+| `build_examples` | `true` | build the host-integration example |
+| `antlr_jar` / `antlr_inc` / `antlr_libdir` | — | paths from `scripts/setup_antlr.sh` |
+
+Reconfigure an existing build dir with `meson configure builddir -Denable_llvm=false`.
 
 ## Using `hmrc`
 
@@ -67,14 +83,14 @@ hmrc compile       <file> [-o out.so]   # full pipeline → native module (LLVM 
 Examples:
 ```sh
 # Inspect what the parser/optimizer make of a ruleset:
-./build/hmrc optimize tests/hmr_samples/topology_hiding.hmr
+./builddir/hmrc optimize tests/hmr_samples/topology_hiding.hmr
 
 # See the generated LLVM IR, then the same IR after the -O3 pipeline:
-./build/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr
-./build/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr --opt
+./builddir/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr
+./builddir/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr --opt
 
 # Compile a ruleset to a loadable module:
-./build/hmrc compile tests/hmr_samples/topology_hiding.hmr -o topo.so
+./builddir/hmrc compile tests/hmr_samples/topology_hiding.hmr -o topo.so
 ```
 
 The before/after IR is walked through in
@@ -85,7 +101,9 @@ The before/after IR is walked through in
 
 ## Writing HMR
 
-The DSL is indentation-structured (Python-style). A minimal ruleset:
+The DSL is **keyword-delimited** — block structure comes from the Oracle HMR
+keywords, not from indentation (whitespace is purely cosmetic, matching how real
+Oracle ACLI dumps are laid out). A minimal ruleset:
 
 ```hmr
 sip-manipulation TopologyHiding
@@ -96,11 +114,13 @@ sip-manipulation TopologyHiding
                 msg-type       any
 ```
 
-* Block keywords (`sip-manipulation`, `header-rule`, `element-rule`) stand alone
-  on their line; `name` is a child attribute (an optional inline name after the
-  keyword is also accepted).
-* A `match-value` is **always a regular expression** (see
-  [runtime-api.md](./runtime-api.md#why-match-values-are-always-regexes)).
+* Block keywords (`sip-manipulation`, `header-rule`, `element-rule`) and the
+  attribute keywords (`name` / `header-name`) start a block; `name` is a child
+  attribute (an optional inline name after the keyword is also accepted).
+* A `match-value` is lowered to the matcher its comparison-type / match-val-type
+  calls for — an exact byte compare, an IP matcher, or a regex only for
+  `pattern-rule` (see
+  [how match-values are lowered](./runtime-api.md#how-match-values-are-lowered)).
 * `new-value` supports literals, `$VAR` built-ins, `$N` capture back-references,
   and `+` concatenation.
 
@@ -118,25 +138,25 @@ negatives. The feature support table is in
 
 A compiled module resolves its `hmr_rt_*` callbacks against the **host**
 process, so the host must export those symbols (link the host with
-`ENABLE_EXPORTS` / `-rdynamic`, pulling in `hmr_core`'s `Runtime.cpp`). The host
+`-rdynamic`/`export_dynamic`, pulling in the `hmr_runtime` library). The host
 then loads the module through the `ModuleManager`:
 
 ```cpp
-#include "hmr/module/ModuleManager.hpp"
-#include "hmr/runtime/Runtime.hpp"
+#include "hmr/module/module_manager.hpp"
+#include "hmr/runtime/context.hpp"
 
 hmr::module::ModuleManager mgr;
 auto loaded = mgr.load("topo.so");          // dlopen + ABI check
 auto& mod   = **loaded;
 
-auto ctx = hmr::runtime::makeContext(mod.info());
-ctx.setVar(HMR_VAR_LOCAL_IP, "203.0.113.5");
+auto ctx = hmr::runtime::make_context(mod.info());
+ctx.set_var(HMR_VAR_LOCAL_IP, "203.0.113.5");
 
-ctx.resetForApply();
+ctx.reset_for_apply();
 int verdict = mod.apply(&msg, &ctx);        // HMR_OK / HMR_REJECTED / HMR_ERROR
 ```
 
-A complete, buildable host (with its own `CMakeLists.txt`) is in
+A complete, buildable host (wired into the Meson build) is in
 [`examples/host_integration/`](../examples/host_integration). The full callback
 contract is documented in [runtime-api.md](./runtime-api.md).
 
@@ -152,6 +172,7 @@ reader drops it (RCU-style, no reader lock on the apply path). Subscribe to
 ## Performance expectations
 
 See [performance.md](./performance.md) for measured numbers and an honest
-account of which issue targets are met (compile time, module size) and which are
-aspirational with the current `std::string`/`std::regex` runtime model
-(per-packet latency).
+account of which issue targets are met (compile time, module size, faster than
+both the interpreter and the GCC approach) and which remain aspirational
+(per-packet latency, now ~3× better after the arena + specialized-matcher rework
+but still above the ns-scale target).

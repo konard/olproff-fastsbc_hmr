@@ -1,18 +1,14 @@
-# Build directories
+# Meson build directories
 /build/
 /build-*/
 /builddir/
-/cmake-build-*/
+/builddir-*/
 out/
 .cache/
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-CTestTestfile.cmake
-Testing/
 compile_commands.json
+
+# ANTLR4 toolchain prefix fetched/built by scripts/setup_antlr.sh
+/.antlr/
 
 # Generated ANTLR sources (built into the build dir; guard against stray
 # in-tree generation if a tool is run by hand with the wrong output path).

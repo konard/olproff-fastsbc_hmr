@@ -39,8 +39,8 @@ typedef struct HmrContext HmrContext;  /* per-apply scratch + built-in state */
 ```
 
 Their layout lives in the C++ runtime
-([`SipMessage.hpp`](../include/hmr/runtime/SipMessage.hpp),
-[`Runtime.hpp`](../include/hmr/runtime/Runtime.hpp)); generated code only passes
+([`sip_message.hpp`](../include/hmr/runtime/sip_message.hpp),
+[`context.hpp`](../include/hmr/runtime/context.hpp)); generated code only passes
 them through. **One `HmrContext` is bound to one worker thread** — all callbacks
 are reentrant across distinct contexts, so an N-thread SBC uses N contexts with
 zero shared mutable state.
@@ -72,13 +72,28 @@ Header names are matched case-insensitively (RFC 3261).
 
 ### Matching
 ```c
+int hmr_rt_match(HmrContext*, uint32_t match_type, HmrStr subject,
+                 HmrStr pattern, uint32_t regex_id);
 int hmr_rt_str_eq(HmrStr a, HmrStr b, int case_insensitive);
 int hmr_rt_regex_match(HmrContext*, uint32_t regex_id, HmrStr subject);
 ```
-`hmr_rt_regex_match` evaluates the precompiled regex at table index `regex_id`
-and, on a match, records the capture groups into the context for later `$N`
-back-references. **Every** HMR `match-value` lowers to this call — see
-[Why match-values are always regexes](#why-match-values-are-always-regexes).
+`hmr_rt_match` is the unified match-val-type dispatch the generator emits for
+every `match-value`. `match_type` is an `HmrMatchType` selecting the engine:
+
+| `HmrMatchType` | Engine | Uses |
+|---|---|---|
+| `HMR_MATCH_EXACT` / `_CI` | byte compare (ASCII case-folded for `_CI`) | `pattern` |
+| `HMR_MATCH_REGEX` | precompiled `std::regex`, records captures | `regex_id` |
+| `HMR_MATCH_IP` | canonical IP equality (v4 & v6) | `pattern` |
+| `HMR_MATCH_IP_MASK` | CIDR / dotted-netmask subnet membership | `pattern` |
+| `HMR_MATCH_IP_RANGE` | inclusive low–high range | `pattern` |
+| `HMR_MATCH_FQDN` | case-insensitive domain compare | `pattern` |
+
+Only `HMR_MATCH_REGEX` consults the precompiled regex table (and records capture
+groups for later `$N` back-references); the other engines compare `pattern`
+directly and allocate nothing. `hmr_rt_str_eq` and `hmr_rt_regex_match` remain
+the lower-level primitives `hmr_rt_match` is built on. See
+[How match-values are lowered](#how-match-values-are-lowered).
 
 ### Captures, variables, slots
 ```c
@@ -131,35 +146,48 @@ The host builds an `HmrContext` from a loaded module's descriptor and binds the
 built-in variables it knows before each apply:
 
 ```cpp
-#include "hmr/runtime/Runtime.hpp"
+#include "hmr/runtime/context.hpp"
 
-auto ctx = hmr::runtime::makeContext(mod.info()); // compiles regexes, sizes slots
-ctx.setVar(HMR_VAR_LOCAL_IP,    "203.0.113.5");
-ctx.setVar(HMR_VAR_TRUNK_GROUP, "tg-42");
-ctx.setVar(HMR_VAR_REALM,       "core.example.net");
+auto ctx = hmr::runtime::make_context(mod.info()); // compiles regexes, sizes slots
+ctx.set_var(HMR_VAR_LOCAL_IP,    "203.0.113.5");
+ctx.set_var(HMR_VAR_TRUNK_GROUP, "tg-42");
+ctx.set_var(HMR_VAR_REALM,       "core.example.net");
 
 for (each packet) {
-    ctx.resetForApply();              // clears captures/scratch/verdict, keeps capacity
+    ctx.reset_for_apply();            // clears captures/scratch/verdict, keeps capacity
     int verdict = mod.apply(&msg, &ctx);
 }
 ```
 
-`makeContext` compiles the module's regex table once (throws `std::regex_error`
-on a bad pattern) and sizes the store/load slots. `resetForApply()` clears
+`make_context` compiles the module's regex table once (throws `std::regex_error`
+on a bad pattern) and sizes the store/load slots. `reset_for_apply()` clears
 per-packet state while retaining buffer capacity — the source of the
 zero-allocation steady state. See [examples/host_integration](../examples/host_integration)
 for a complete, buildable host.
 
-## Why match-values are always regexes
+## How match-values are lowered
 
-In Oracle HMR a `match-value` is a **regular expression for every
-comparison-type**, not only `pattern-rule`. The IR generator therefore lowers
-*every* literal `match-value` to an `addRegex` table entry + a
-`hmr_rt_regex_match` guard (with the case-insensitive flag set for
-`case-insensitive` comparisons), rather than a `str_eq`. This is the single most
-important compatibility decision in the code generator; matching Oracle's
-semantics here is what lets real-world rulesets (which rely on anchors and
-character classes inside ostensibly "literal" match-values) compile correctly.
+Oracle HMR supports several kinds of value comparison, and routing all of them
+through `std::regex` — as the first draft did — is both slow and semantically
+wrong (an exact comparison must be a byte compare; an address comparison must
+understand IP arithmetic). The IR generator therefore picks the matcher per rule
+at codegen time and emits a single `hmr_rt_match` with the chosen `HmrMatchType`:
+
+* **`pattern-rule`** comparison-type → `HMR_MATCH_REGEX`: an `add_regex` table
+  entry (case-insensitive flag set for the `*-insensitive` comparisons) plus the
+  capture-recording regex engine. Literals that genuinely need regex semantics
+  (anchors, character classes) still take this path.
+* **`ip`** match-val-type → `HMR_MATCH_IP` / `HMR_MATCH_IP_MASK` /
+  `HMR_MATCH_IP_RANGE`, chosen from the pattern's shape (a bare address,
+  `addr/prefix`, or `lo-hi`).
+* **`fqdn`** match-val-type → `HMR_MATCH_FQDN`.
+* **everything else** → `HMR_MATCH_EXACT` / `HMR_MATCH_EXACT_CI`, a plain byte
+  compare folded per the comparison-type.
+
+The specialized matchers live in
+[`matchers.hpp`](../include/hmr/runtime/matchers.hpp) and are unit-tested in
+isolation ([`tests/test_matchers.cpp`](../tests/test_matchers.cpp)); each is
+pure, `noexcept`, and never allocates — malformed input simply does not match.
 
 ## ABI stability
 

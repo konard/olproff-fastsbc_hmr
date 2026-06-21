@@ -9,47 +9,63 @@ object, which a linker driver turns into a shared object the runtime `dlopen`s.
 
 ```
  HMR text
-    │  Lexer (indentation-aware)            src/parser/Lexer.cpp
+    │  ANTLR4 lexer (keyword-delimited)     grammar/Hmr.g4 → generated HmrLexer
     ▼
  Token stream
-    │  Parser (recursive descent)           src/parser/Parser.cpp
+    │  ANTLR4 parser + visitor → AST        grammar/Hmr.g4 → HmrParser, src/parser/parser.cpp
     ▼
- AST (Ruleset)                              include/hmr/ast/Ast.hpp
-    │  Optimizer (CRTP pass chain)          src/optimizer/Optimizer.cpp
+ AST (Ruleset)                              include/hmr/ast/ast.hpp
+    │  Optimizer (CRTP pass chain)          src/optimizer/optimizer.cpp
     ▼
  Optimized AST + DecisionPlan
-    │  IrGenerator (Visitor + IRBuilder)    src/codegen/IrGenerator.cpp
+    │  IrGenerator (Visitor + IRBuilder)    src/codegen/ir_generator.cpp
     ▼
  LLVM IR (textual std::string)
-    │  Backend (custom pass + O3 + emit)    src/backend/Backend.cpp
+    │  Backend (custom pass + O3 + emit)    src/backend/backend.cpp
     ▼
  Relocatable object (.o, in memory)
-    │  Linker (cc -shared driver)           src/backend/Linker.cpp
+    │  Linker (cc -shared driver)           src/backend/linker.cpp
     ▼
  Shared object (.so)
-    │  ModuleManager (dlopen, RCU reload)   src/module/ModuleManager.cpp
+    │  ModuleManager (dlopen, RCU reload)   src/module/module_manager.cpp
     ▼
  Loaded module → hmr_apply(SipMsg*, Context*)
 ```
 
+The same optimized AST also feeds two other back-ends — an AST interpreter
+([`src/interp/interpreter.cpp`](../src/interp/interpreter.cpp), the reference
+oracle) and a C++ source generator
+([`src/codegen/cpp_generator.cpp`](../src/codegen/cpp_generator.cpp), the "GCC
+approach") — so the compiled path can be cross-checked for correctness and
+benchmarked against both (see [performance.md](./performance.md)).
+
 The whole chain is hidden behind a single Facade,
-[`hmr::pipeline::Compiler`](../include/hmr/pipeline/Compiler.hpp).
+[`hmr::pipeline::Compiler`](../include/hmr/pipeline/compiler.hpp).
 
 ## Layering
 
-The build is split into two static libraries so the LLVM dependency is
-contained and the inner development loop stays fast:
+The build (Meson) is split into small static libraries so the LLVM dependency is
+contained to the back end and the inner development loop stays fast:
 
-| Library | Sources | Depends on |
+| Library | Sources | LLVM? |
 |---|---|---|
-| `hmr_core` | parser, AST, optimizer, runtime model | nothing heavy (STL only) |
-| `hmr_codegen` | IR generator, backend, linker, module manager, pipeline Facade | `hmr_core` + LLVM + `dl` |
+| `hmr_antlr` | ANTLR4-generated lexer/parser/visitor (warnings off) | no |
+| `hmr_frontend` | parse-tree visitor, AST, factory, value folding | no |
+| `hmr_runtime` | arena SIP model, specialized matchers, URI, `hmr_rt_*` callbacks | no |
+| `hmr_optimizer` | CRTP pass chain + decision-tree analysis | no |
+| `hmr_interp` | AST tree-walking interpreter (reference oracle) | no |
+| `hmr_cppgen` | C++ source generator (the "GCC approach") | no |
+| `hmr_codegen` | LLVM IR generator | **yes** |
+| `hmr_backend` | object emission + linker driver | **yes** |
+| `hmr_module` | module manager (dlopen, RCU hot reload, Observer) | **yes** + `dl` |
+| `hmr_pipeline` | `Compiler` Facade tying the LLVM path together | **yes** |
 
-`hmr_core` has **no LLVM dependency** and is fully unit-testable on its own.
-When LLVM is absent (`-DHMR_ENABLE_LLVM=OFF`, or `find_package(LLVM)` fails) the
-build degrades gracefully to the front-end only: the lexer, parser, optimizer,
-runtime model, and the front-end subcommands of `hmrc` still build and pass
-their tests. The CI `frontend-only` job exercises exactly this path.
+The first six libraries have **no LLVM dependency** and are fully unit-testable
+on their own. When LLVM is absent (`-Denable_llvm=false`, or no `llvm-config` on
+the host) the build degrades gracefully: the four LLVM-gated libraries are
+skipped while the front end, runtime, optimizer, interpreter, C++ generator, and
+the front-end subcommands of `hmrc` still build and pass their tests. The CI
+`frontend-only` job exercises exactly this path.
 
 The seam between `hmr_codegen`'s code generator and its backend is deliberately
 **textual LLVM IR** (a `std::string`). The IR generator never touches an LLVM
@@ -59,37 +75,42 @@ the IR string) and the boundary trivially serializable.
 
 ## Stages
 
-### Lexer — `src/parser/Lexer.cpp`
-HMR is an off-side-rule language: block structure comes from leading
-whitespace, exactly like Python. The lexer is a hand-written denter that emits
-synthetic `INDENT` / `DEDENT` tokens around a column stack (tab stop = 8,
-`Lexer::kTabWidth`). Blank and comment-only lines never affect indentation; a
-`#` starts a comment only at a token boundary. All keywords are *contextual* —
-every bareword is a `WORD` token and the parser decides meaning by position, so
-a rule may legally be named `add` or use `delete` as a value.
+### Lexer & parser — generated by ANTLR4 from `grammar/Hmr.g4`
+The lexer and parser are **generated** (`antlr4 -Dlanguage=Cpp -visitor
+-no-listener`); there is no hand-written lexer. Block structure comes from the
+Oracle HMR **keywords** — `sip-manipulation`, `header-rule`, `element-rule`, and
+the attribute keywords `name` / `header-name` — *not* from indentation, matching
+how real Oracle ACLI dumps are laid out. Enum values are plain `WORD` tokens
+classified after the parse by the AST factory, so adding an enum spelling needs
+no grammar change.
 
-### Parser — `src/parser/Parser.cpp`
-A recursive-descent parser that mirrors, rule-for-rule, the reference grammar in
-[`grammar/Hmr.g4`](../grammar/Hmr.g4). It builds the `Ruleset` AST via an
-[AST factory](../include/hmr/ast/AstFactory.hpp) (GoF **Factory**), validates
-enum spellings, and collects non-fatal **warnings** (unknown attributes are
-warn-and-ignore, matching Oracle's lenient config loader) separately from fatal
-diagnostics.
+### Parse-tree visitor — `src/parser/parser.cpp`
+A visitor over the generated parse tree builds the `Ruleset` AST through an
+[AST factory](../include/hmr/ast/ast_factory.hpp) (GoF **Factory**), validates
+enum spellings, and reports recognized-but-unsupported blocks (`mime-*-rule`)
+and unknown attributes as non-fatal **warnings** (matching Oracle's lenient
+config loader) separately from fatal diagnostics. A `CollectingErrorListener`
+accumulates **every** lexer/parser syntax error instead of aborting at the
+first, so a single parse reports all problems at once (parser error recovery).
 
-### Optimizer — `src/optimizer/Optimizer.cpp`
+### Optimizer — `src/optimizer/optimizer.cpp`
 A chain of CRTP passes (`PassBase<Derived>`, GoF **Strategy** specialized at
 compile time for zero-cost dispatch) run to a fixpoint, followed by one analysis
 pass. See [the pass list](#optimizer-passes) below.
 
-### IR generator — `src/codegen/IrGenerator.cpp`
+### IR generator — `src/codegen/ir_generator.cpp`
 An AST **Visitor** driving an LLVM `IRBuilder`. It emits one `hmr_apply`
-function plus a `hmr_module_info` descriptor. Every comparison — even a literal
-`match-value` — is lowered to a precompiled-regex guard (`hmr_rt_regex_match`),
-because in Oracle HMR a `match-value` is *always* a regular expression. String
+function plus a `hmr_module_info` descriptor, and returns the module as **textual
+LLVM IR**. Each `match-value` is lowered to the *specialized* matcher its
+comparison-type / match-val-type calls for, dispatched through `hmr_rt_match`: an
+exact byte compare for literals (`HMR_MATCH_EXACT`/`_CI`), a precompiled regex
+only for `pattern-rule` (and literals that genuinely need regex semantics), and
+the IP-aware `ip` / `ip-mask` / `ip-range` matchers for address comparisons —
+routing every value through `std::regex` was the old, slow design. String
 literals, `$VAR` interpolations, and `$N` captures in `new-value` are lowered to
 a sequence of value-builder callbacks.
 
-### Backend — `src/backend/Backend.cpp`
+### Backend — `src/backend/backend.cpp`
 Parses the IR text, runs a custom `HmrAttributePass` (`PassInfoMixin`, marks
 `hmr_apply` and the `hmr_rt_*` callbacks `nounwind`) ahead of the standard
 `PassBuilder` `-O<n>` pipeline (new pass manager), then emits a PIC relocatable
@@ -99,7 +120,7 @@ is exposed as `Backend::optimizeIR()`, which stops before codegen and returns th
 optimized IR as text — that powers `hmrc dump-ir --opt` and the worked
 before/after walkthrough in [llvm-ir-examples.md](./llvm-ir-examples.md).
 
-### Linker — `src/backend/Linker.cpp`
+### Linker — `src/backend/linker.cpp`
 Writes the object to a temp file and drives `cc -shared` via `posix_spawnp` to
 produce the `.so` (override with `HMR_CC` or `LinkOptions::driver`). Using the
 system `cc` driver — rather than calling LLD's library API directly — is an
@@ -107,7 +128,7 @@ system `cc` driver — rather than calling LLD's library API directly — is an
 handles crt objects and library paths for us, and you can route it through LLD
 with `driver = "clang"` + `-fuse-ld=lld`.
 
-### Module manager — `src/module/ModuleManager.cpp`
+### Module manager — `src/module/module_manager.cpp`
 `dlopen`s the module, resolves `hmr_apply` + `hmr_module_info`, checks
 `abi_version == HMR_ABI_VERSION`, and publishes it through an
 `std::atomic<std::shared_ptr<const LoadedModule>>`. Hot replacement is **RCU
