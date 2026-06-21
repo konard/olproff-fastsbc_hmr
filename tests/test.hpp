@@ -36,14 +36,14 @@ struct Registrar {
 };
 
 // Per-test failure counter (reset by the runner before each case).
-inline int& currentFailures() {
+inline int& current_failures() {
     static int f = 0;
     return f;
 }
 
-inline void reportFailure(std::string_view file, int line,
+inline void report_failure(std::string_view file, int line,
                           std::string_view expr) {
-    ++currentFailures();
+    ++current_failures();
     std::fprintf(stderr, "    FAIL %.*s:%d  %.*s\n",
                  static_cast<int>(file.size()), file.data(), line,
                  static_cast<int>(expr.size()), expr.data());
@@ -53,7 +53,7 @@ inline int run() {
     int failed = 0;
     int passed = 0;
     for (const auto& c : registry()) {
-        currentFailures() = 0;
+        current_failures() = 0;
         bool threw = false;
         try {
             c.fn();
@@ -66,7 +66,7 @@ inline int run() {
             std::fprintf(stderr, "    FAIL %s.%s threw unknown exception\n",
                          c.suite.c_str(), c.name.c_str());
         }
-        if (currentFailures() == 0 && !threw) {
+        if (current_failures() == 0 && !threw) {
             ++passed;
             std::fprintf(stdout, "  ok   %s.%s\n", c.suite.c_str(),
                          c.name.c_str());
@@ -94,25 +94,25 @@ inline int run() {
 
 #define CHECK(cond)                                                        \
     do {                                                                   \
-        if (!(cond)) ::hmrtest::reportFailure(__FILE__, __LINE__, #cond);  \
+        if (!(cond)) ::hmrtest::report_failure(__FILE__, __LINE__, #cond);  \
     } while (0)
 
 #define CHECK_EQ(a, b)                                                     \
     do {                                                                   \
         if (!((a) == (b)))                                                 \
-            ::hmrtest::reportFailure(__FILE__, __LINE__, #a " == " #b);    \
+            ::hmrtest::report_failure(__FILE__, __LINE__, #a " == " #b);    \
     } while (0)
 
 #define CHECK_NE(a, b)                                                     \
     do {                                                                   \
         if (!((a) != (b)))                                                 \
-            ::hmrtest::reportFailure(__FILE__, __LINE__, #a " != " #b);    \
+            ::hmrtest::report_failure(__FILE__, __LINE__, #a " != " #b);    \
     } while (0)
 
 #define REQUIRE(cond)                                                      \
     do {                                                                   \
         if (!(cond)) {                                                     \
-            ::hmrtest::reportFailure(__FILE__, __LINE__, #cond);           \
+            ::hmrtest::report_failure(__FILE__, __LINE__, #cond);           \
             return;                                                        \
         }                                                                  \
     } while (0)

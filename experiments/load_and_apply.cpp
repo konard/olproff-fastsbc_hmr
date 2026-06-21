@@ -8,17 +8,31 @@
 //
 // Build (host must export hmr_rt_* for the module to resolve them):
 //   g++ -std=c++23 -O2 -rdynamic -Iinclude experiments/load_and_apply.cpp \
-//       build/libhmr_core.a -ldl -o /tmp/load_and_apply
+//       builddir/libhmr_core.a -ldl -o /tmp/load_and_apply
 //   /tmp/load_and_apply <module.so>
 
 #include <dlfcn.h>
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
-#include "hmr/runtime/Runtime.hpp"
-#include "hmr/runtime/SipMessage.hpp"
+#include "hmr/runtime/arena.hpp"
+#include "hmr/runtime/context.hpp"
 #include "hmr/runtime/hmr_runtime.h"
+#include "hmr/runtime/sip_message.hpp"
+
+namespace {
+
+// Serialize `msg` into `scratch` and write it to stdout.
+void print_msg(const HmrSipMsg& msg, HmrArena& scratch) {
+    scratch.reset();
+    const HmrStr s = msg.serialize(scratch);
+    std::fwrite(s.data, 1, s.len, stdout);
+    std::fputc('\n', stdout);
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
@@ -32,20 +46,21 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    void* infoSym = ::dlsym(h, "hmr_module_info");
-    void* applySym = ::dlsym(h, "hmr_apply");
-    if (!infoSym || !applySym) {
+    void* info_sym = ::dlsym(h, "hmr_module_info");
+    void* apply_sym = ::dlsym(h, "hmr_apply");
+    if (!info_sym || !apply_sym) {
         std::fprintf(stderr, "missing exports\n");
         return 1;
     }
-    auto* info = static_cast<const HmrModuleInfo*>(infoSym);
+    auto* info = static_cast<const HmrModuleInfo*>(info_sym);
     hmr_apply_fn apply = nullptr;
-    std::memcpy(&apply, &applySym, sizeof apply);
+    std::memcpy(&apply, &apply_sym, sizeof apply);
 
     std::printf("module: %s  abi=%u slots=%u regexes=%u\n", info->name,
                 info->abi_version, info->num_slots, info->num_regexes);
 
-    // A representative outbound request that leaks internal topology.
+    // A representative outbound request that leaks internal topology. The raw
+    // bytes have static storage, so the slices the message holds stay valid.
     const char* raw =
         "INVITE sip:bob@example.com SIP/2.0\r\n"
         "From: \"Alice\" <sip:alice@internal.local>;tag=99\r\n"
@@ -56,16 +71,21 @@ int main(int argc, char** argv) {
         "Contact: <sip:alice@10.0.0.1>\r\n";
     HmrSipMsg msg = HmrSipMsg::parse(raw);
 
-    auto ctx = hmr::runtime::makeContext(*info);
-    ctx.setVar(HMR_VAR_LOCAL_IP, "203.0.113.5");
-    ctx.setVar(HMR_VAR_TRUNK_GROUP, "tg-42");
-    ctx.setVar(HMR_VAR_REALM, "core.example.net");
-    ctx.resetForApply();
+    auto ctx = hmr::runtime::make_context(*info);
+    ctx.set_var(HMR_VAR_LOCAL_IP, "203.0.113.5");
+    ctx.set_var(HMR_VAR_TRUNK_GROUP, "tg-42");
+    ctx.set_var(HMR_VAR_REALM, "core.example.net");
+    ctx.reset_for_apply();
 
-    std::printf("--- before ---\n%s\n", msg.toString().c_str());
+    // A dedicated scratch arena to render snapshots, independent of the context.
+    auto scratch = std::make_unique<HmrArena>();
+
+    std::printf("--- before ---\n");
+    print_msg(msg, *scratch);
     int verdict = apply(&msg, &ctx);
     std::printf("--- verdict = %d ---\n", verdict);
-    std::printf("--- after ---\n%s\n", msg.toString().c_str());
+    std::printf("--- after ---\n");
+    print_msg(msg, *scratch);
 
     ::dlclose(h);
     return 0;

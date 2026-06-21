@@ -243,10 +243,10 @@ private:
     BasicBlock* block(const Twine& name) {
         return BasicBlock::Create(ctx_, name, apply_fn_);
     }
-    // Branch to `okBB` when `condI1` holds, else to `skip`; continue at okBB.
-    void guard(llvm::Value* condI1, const Twine& okName, BasicBlock* skip) {
-        BasicBlock* ok = block(okName);
-        b_.CreateCondBr(condI1, ok, skip);
+    // Branch to `ok_bb` when `cond_i1` holds, else to `skip`; continue at ok_bb.
+    void guard(llvm::Value* cond_i1, const Twine& ok_name, BasicBlock* skip) {
+        BasicBlock* ok = block(ok_name);
+        b_.CreateCondBr(cond_i1, ok, skip);
         b_.SetInsertPoint(ok);
     }
     llvm::Value* truthy(llvm::Value* i32v) { return b_.CreateICmpNE(i32v, ci32(0)); }
@@ -512,35 +512,35 @@ void Emitter::emit_header_rule(const HeaderRule& hr, std::size_t idx) {
 
 void Emitter::build_module_info(const std::string& module_name) {
     // Regex table: [N x %HmrRegexEntry], referenced by hmr_module_info.
-    StructType* regexEntryTy = StructType::create(ctx_, {ptr_ty_, i32_ty_}, "HmrRegexEntry");
-    llvm::Constant* regexesPtr = ConstantPointerNull::get(ptr_ty_);
+    StructType* regex_entry_ty = StructType::create(ctx_, {ptr_ty_, i32_ty_}, "HmrRegexEntry");
+    llvm::Constant* regexes_ptr = ConstantPointerNull::get(ptr_ty_);
     if (!regexes_.empty()) {
         std::vector<llvm::Constant*> entries;
         entries.reserve(regexes_.size());
         for (const auto& [pat, flags] : regexes_) {
             IrStr s = literal(pat);  // interned NUL-terminated pattern
             entries.push_back(ConstantStruct::get(
-                regexEntryTy, {cast<llvm::Constant>(s.data), ci32(flags)}));
+                regex_entry_ty, {cast<llvm::Constant>(s.data), ci32(flags)}));
         }
-        ArrayType* arrTy = ArrayType::get(regexEntryTy, entries.size());
-        auto* table = new GlobalVariable(mod_, arrTy, /*isConstant=*/true,
+        ArrayType* arr_ty = ArrayType::get(regex_entry_ty, entries.size());
+        auto* table = new GlobalVariable(mod_, arr_ty, /*isConstant=*/true,
                                          GlobalValue::PrivateLinkage,
-                                         ConstantArray::get(arrTy, entries),
+                                         ConstantArray::get(arr_ty, entries),
                                          "hmr.regexes");
         table->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-        regexesPtr = table;
+        regexes_ptr = table;
     }
 
-    StructType* modInfoTy = StructType::create(
+    StructType* mod_info_ty = StructType::create(
         ctx_, {i32_ty_, ptr_ty_, i32_ty_, i32_ty_, ptr_ty_}, "HmrModuleInfo");
-    IrStr nameStr = literal(module_name);
+    IrStr name_str = literal(module_name);
     llvm::Constant* init = ConstantStruct::get(
-        modInfoTy,
-        {ci32(HMR_ABI_VERSION), cast<llvm::Constant>(nameStr.data),
+        mod_info_ty,
+        {ci32(HMR_ABI_VERSION), cast<llvm::Constant>(name_str.data),
          ci32(static_cast<uint32_t>(slots_.size())),
-         ci32(static_cast<uint32_t>(regexes_.size())), regexesPtr});
+         ci32(static_cast<uint32_t>(regexes_.size())), regexes_ptr});
 
-    auto* info = new GlobalVariable(mod_, modInfoTy, /*isConstant=*/true,
+    auto* info = new GlobalVariable(mod_, mod_info_ty, /*isConstant=*/true,
                                     GlobalValue::ExternalLinkage, init,
                                     "hmr_module_info");
     info->setAlignment(Align(8));
@@ -550,8 +550,8 @@ Result<void> Emitter::emit(const Ruleset& rs, const opt::DecisionPlan& plan,
                            IrModuleStats* stats) {
     (void)plan;  // emission preserves original order; plan is reported as stats
 
-    FunctionType* applyTy = FunctionType::get(i32_ty_, {ptr_ty_, ptr_ty_}, false);
-    apply_fn_ = Function::Create(applyTy, GlobalValue::ExternalLinkage, "hmr_apply", mod_);
+    FunctionType* apply_ty = FunctionType::get(i32_ty_, {ptr_ty_, ptr_ty_}, false);
+    apply_fn_ = Function::Create(apply_ty, GlobalValue::ExternalLinkage, "hmr_apply", mod_);
     apply_fn_->getArg(0)->setName("msg");
     apply_fn_->getArg(1)->setName("ctx");
     msg_ = apply_fn_->getArg(0);
