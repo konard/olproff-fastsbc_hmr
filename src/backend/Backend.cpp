@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Backend.cpp — LLVM IR text → optimized native object.
+// Backend.cpp — LLVM IR text → optimized native object (or optimized IR text).
 
 #include "hmr/backend/Backend.hpp"
 
@@ -71,47 +71,63 @@ OptimizationLevel toLevel(unsigned o) {
     }
 }
 
-}  // namespace
+// A parsed, target-configured, fully optimized module bundled with everything
+// that must outlive it. Members are declared context-first so destruction runs
+// in reverse — module before its target machine and LLVMContext.
+struct OptimizedModule {
+    std::unique_ptr<LLVMContext> context;
+    std::unique_ptr<TargetMachine> tm;
+    std::unique_ptr<Module> module;
+    std::string triple;
+};
 
-Result<ObjectCode> Backend::compileToObject(const std::string& llvmIR,
-                                            const BackendOptions& opts) {
+// Shared front half of both public entry points: parse the IR text, configure
+// the host (or requested) target machine, verify, then run the HMR pass plus
+// the standard -O<n> module pipeline. On return the module is fully optimized;
+// callers either emit an object from it or print it back to text.
+Result<OptimizedModule> parseAndOptimize(const std::string& llvmIR,
+                                         const BackendOptions& opts) {
     ensureTargetsInitialized();
 
-    LLVMContext context;
+    OptimizedModule out;
+    out.context = std::make_unique<LLVMContext>();
+
     SMDiagnostic diag;
-    std::unique_ptr<Module> module =
-        parseAssemblyString(llvmIR, diag, context);
-    if (!module) {
+    out.module = parseAssemblyString(llvmIR, diag, *out.context);
+    if (!out.module) {
         std::string msg;
         raw_string_ostream os(msg);
         diag.print("hmr-ir", os);
         os.flush();
         return make_error("backend: failed to parse generated IR:\n" + msg);
     }
+    // parseAssemblyString names the module after its (anonymous) buffer; restore
+    // the original identifier so optimized-IR dumps match the generator's header.
+    if (!out.module->getSourceFileName().empty())
+        out.module->setModuleIdentifier(out.module->getSourceFileName());
 
-    const std::string triple = opts.targetTriple.empty()
-                                   ? sys::getDefaultTargetTriple()
-                                   : opts.targetTriple;
+    out.triple = opts.targetTriple.empty() ? sys::getDefaultTargetTriple()
+                                           : opts.targetTriple;
 
     std::string lookupErr;
-    const Target* target = TargetRegistry::lookupTarget(triple, lookupErr);
+    const Target* target = TargetRegistry::lookupTarget(out.triple, lookupErr);
     if (!target)
-        return make_error("backend: no target for triple '" + triple +
+        return make_error("backend: no target for triple '" + out.triple +
                           "': " + lookupErr);
 
     TargetOptions targetOpts;
     auto reloc = std::optional<Reloc::Model>(Reloc::PIC_);  // PIC → shared object
-    std::unique_ptr<TargetMachine> tm(target->createTargetMachine(
-        triple, opts.cpu, opts.features, targetOpts, reloc));
-    if (!tm) return make_error("backend: could not create target machine");
+    out.tm.reset(target->createTargetMachine(out.triple, opts.cpu, opts.features,
+                                             targetOpts, reloc));
+    if (!out.tm) return make_error("backend: could not create target machine");
 
-    module->setTargetTriple(triple);
-    module->setDataLayout(tm->createDataLayout());
+    out.module->setTargetTriple(out.triple);
+    out.module->setDataLayout(out.tm->createDataLayout());
 
     if (opts.verify) {
         std::string verr;
         raw_string_ostream os(verr);
-        if (verifyModule(*module, &os)) {
+        if (verifyModule(*out.module, &os)) {
             os.flush();
             return make_error("backend: module failed verification:\n" + verr);
         }
@@ -123,7 +139,7 @@ Result<ObjectCode> Backend::compileToObject(const std::string& llvmIR,
     CGSCCAnalysisManager cgam;
     ModuleAnalysisManager mam;
 
-    PassBuilder pb(tm.get());
+    PassBuilder pb(out.tm.get());
     pb.registerModuleAnalyses(mam);
     pb.registerCGSCCAnalyses(cgam);
     pb.registerFunctionAnalyses(fam);
@@ -134,29 +150,51 @@ Result<ObjectCode> Backend::compileToObject(const std::string& llvmIR,
     {
         ModulePassManager pre;
         pre.addPass(HmrAttributePass());
-        pre.run(*module, mam);
+        pre.run(*out.module, mam);
     }
     {
         const OptimizationLevel level = toLevel(opts.optLevel);
         ModulePassManager mpm =
             (opts.optLevel == 0) ? pb.buildO0DefaultPipeline(level)
                                  : pb.buildPerModuleDefaultPipeline(level);
-        mpm.run(*module, mam);
+        mpm.run(*out.module, mam);
     }
+
+    return out;
+}
+
+}  // namespace
+
+Result<ObjectCode> Backend::compileToObject(const std::string& llvmIR,
+                                            const BackendOptions& opts) {
+    auto opt = parseAndOptimize(llvmIR, opts);
+    if (!opt) return std::unexpected(opt.error());
 
     // --- object emission (legacy codegen pass manager) ---------------------
     SmallVector<char, 0> buffer;
     raw_svector_ostream objStream(buffer);
     legacy::PassManager codegenPM;
-    if (tm->addPassesToEmitFile(codegenPM, objStream, /*DwoOut=*/nullptr,
-                                CodeGenFileType::ObjectFile)) {
+    if (opt->tm->addPassesToEmitFile(codegenPM, objStream, /*DwoOut=*/nullptr,
+                                     CodeGenFileType::ObjectFile)) {
         return make_error("backend: target cannot emit object files");
     }
-    codegenPM.run(*module);
+    codegenPM.run(*opt->module);
 
     ObjectCode out;
-    out.triple = triple;
+    out.triple = opt->triple;
     out.bytes.assign(buffer.begin(), buffer.end());
+    return out;
+}
+
+Result<std::string> Backend::optimizeIR(const std::string& llvmIR,
+                                        const BackendOptions& opts) {
+    auto opt = parseAndOptimize(llvmIR, opts);
+    if (!opt) return std::unexpected(opt.error());
+
+    std::string out;
+    raw_string_ostream os(out);
+    opt->module->print(os, /*AAW=*/nullptr);
+    os.flush();
     return out;
 }
 

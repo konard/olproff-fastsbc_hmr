@@ -41,6 +41,13 @@ class Backend {
 public:
     [[nodiscard]] Result<ObjectCode> compileToObject(
         const std::string& llvmIR, const BackendOptions& opts = {});
+
+    // Run the same HMR + -O<n> pipeline as compileToObject() but stop before
+    // codegen and return the optimized IR as text. Pairs with the unoptimized
+    // IR from Compiler::compileToIR() to show before/after optimization — see
+    // `hmrc dump-ir --opt` and docs/llvm-ir-examples.md.
+    [[nodiscard]] Result<std::string> optimizeIR(
+        const std::string& llvmIR, const BackendOptions& opts = {});
 };
 
 }  // namespace hmr::backend

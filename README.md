@@ -49,6 +49,10 @@ ctest --test-dir build --output-on-failure
 # Compile an HMR ruleset to a native module:
 ./build/hmrc compile tests/hmr_samples/topology_hiding.hmr -o topo.so
 
+# See the generated LLVM IR, before and after the -O3 pipeline:
+./build/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr
+./build/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr --opt
+
 # Inspect the front-end without LLVM:
 ./build/hmrc optimize tests/hmr_samples/anonymize_from.hmr
 
@@ -91,9 +95,14 @@ include/hmr/    public headers
 src/            implementations mirroring include/
 tests/          self-contained harness, unit + integration, hmr_samples/
 benchmarks/     dependency-free micro-benchmarks
-examples/       host_integration — a complete embedding example
-docs/           architecture, runtime API, user guide, compatibility, perf
+examples/       host_integration embedding + llvm_ir before/after dumps
+docs/           architecture, runtime API, user guide, compatibility, perf, IR
 ```
+
+The `dump-ir` subcommand and the committed
+[`examples/llvm_ir/`](examples/llvm_ir) dumps satisfy the issue's "LLVM IR
+examples (before/after optimization)" deliverable; the walkthrough is in
+[docs/llvm-ir-examples.md](docs/llvm-ir-examples.md).
 
 ## Design patterns
 
@@ -127,6 +136,7 @@ analysis and the route to closing it (DFA matcher, arena SIP model) are in
 * [docs/runtime-api.md](docs/runtime-api.md) — the stable C ABI
 * [docs/compatibility-matrix.md](docs/compatibility-matrix.md) — per-construct support
 * [docs/performance.md](docs/performance.md) — measured numbers, honest gaps
+* [docs/llvm-ir-examples.md](docs/llvm-ir-examples.md) — generated IR before/after `-O3`
 * [docs/oracle-hmr-reference.md](docs/oracle-hmr-reference.md) — Oracle DSL reference
 
 ## Scope & honesty

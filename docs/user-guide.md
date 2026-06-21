@@ -60,6 +60,7 @@ hmrc parse         <file>            # lex + parse, report diagnostics/warnings
 hmrc dump-ast      <file>            # parse and pretty-print the AST back to HMR
 hmrc optimize      <file>            # run the optimizer, print its report + AST
 hmrc check-samples <dir>            # every *.hmr must parse; invalid_* must fail
+hmrc dump-ir       <file> [--opt]    # emit LLVM IR, before / after -O3 (LLVM only)
 hmrc compile       <file> [-o out.so]   # full pipeline → native module (LLVM only)
 ```
 
@@ -68,9 +69,16 @@ Examples:
 # Inspect what the parser/optimizer make of a ruleset:
 ./build/hmrc optimize tests/hmr_samples/topology_hiding.hmr
 
+# See the generated LLVM IR, then the same IR after the -O3 pipeline:
+./build/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr
+./build/hmrc dump-ir tests/hmr_samples/minimal_ruleset.hmr --opt
+
 # Compile a ruleset to a loadable module:
 ./build/hmrc compile tests/hmr_samples/topology_hiding.hmr -o topo.so
 ```
+
+The before/after IR is walked through in
+[llvm-ir-examples.md](./llvm-ir-examples.md).
 
 `check-samples` is what CI uses to gate the sample corpus: files named
 `invalid_*.hmr` are expected to be rejected, all others to parse.

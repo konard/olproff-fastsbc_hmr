@@ -94,7 +94,10 @@ Parses the IR text, runs a custom `HmrAttributePass` (`PassInfoMixin`, marks
 `hmr_apply` and the `hmr_rt_*` callbacks `nounwind`) ahead of the standard
 `PassBuilder` `-O<n>` pipeline (new pass manager), then emits a PIC relocatable
 object via the legacy codegen `PassManager` (`addPassesToEmitFile`). Targets are
-initialized once under `std::call_once`.
+initialized once under `std::call_once`. The same parse-and-optimize front half
+is exposed as `Backend::optimizeIR()`, which stops before codegen and returns the
+optimized IR as text — that powers `hmrc dump-ir --opt` and the worked
+before/after walkthrough in [llvm-ir-examples.md](./llvm-ir-examples.md).
 
 ### Linker — `src/backend/Linker.cpp`
 Writes the object to a temp file and drives `cc -shared` via `posix_spawnp` to

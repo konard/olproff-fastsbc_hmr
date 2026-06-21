@@ -7,11 +7,12 @@
 //   dump-ast     <file>                  parse and pretty-print the AST
 //   optimize     <file>                  parse + run the optimizer, show report
 //   check-samples <dir>                  parse every *.hmr (invalid_* must fail)
+//   dump-ir      <file> [--opt]          emit LLVM IR (before / after -O3) (LLVM)
 //   compile      <file> [-o out.so]      full pipeline to a native module (LLVM)
 //
-// The `compile` subcommand requires the LLVM-backed code generator and is
-// compiled in only when HMR_HAVE_LLVM is defined. The front-end subcommands
-// always work, so the tool is useful even in a no-LLVM build.
+// The `dump-ir` and `compile` subcommands require the LLVM-backed code generator
+// and are compiled in only when HMR_HAVE_LLVM is defined. The front-end
+// subcommands always work, so the tool is useful even in a no-LLVM build.
 
 #include <algorithm>
 #include <cstdio>
@@ -28,6 +29,7 @@
 #include "hmr/parser/Parser.hpp"
 
 #if HMR_HAVE_LLVM
+#include "hmr/backend/Backend.hpp"
 #include "hmr/pipeline/Compiler.hpp"
 #endif
 
@@ -43,6 +45,7 @@ int usage() {
                  "  optimize <file>\n"
                  "  check-samples <dir>\n"
 #if HMR_HAVE_LLVM
+                 "  dump-ir <file> [--opt]\n"
                  "  compile <file> [-o out.so]\n"
 #endif
     );
@@ -149,6 +152,38 @@ int cmdCheckSamples(const std::string& dir) {
 }
 
 #if HMR_HAVE_LLVM
+// Emit the textual LLVM IR for a ruleset. Without --opt this is the IR straight
+// from the generator (before optimization); with --opt the same IR is run
+// through the backend's HMR + -O3 pipeline (after optimization). The pair is the
+// "LLVM IR examples (before/after optimization)" documentation artifact.
+int cmdDumpIr(const std::string& path, bool optimize) {
+    auto src = readFile(path);
+    if (!src) {
+        std::fprintf(stderr, "error: cannot read '%s'\n", path.c_str());
+        return 1;
+    }
+    hmr::pipeline::Compiler compiler;
+    auto ir = compiler.compileToIR(*src);
+    if (!ir) {
+        std::fprintf(stderr, "%s: %s\n", path.c_str(),
+                     ir.error().format().c_str());
+        return 1;
+    }
+    if (!optimize) {
+        std::fputs(ir->c_str(), stdout);
+        return 0;
+    }
+    hmr::backend::Backend backend;
+    auto opt = backend.optimizeIR(*ir);
+    if (!opt) {
+        std::fprintf(stderr, "%s: %s\n", path.c_str(),
+                     opt.error().format().c_str());
+        return 1;
+    }
+    std::fputs(opt->c_str(), stdout);
+    return 0;
+}
+
 int cmdCompile(const std::string& path, const std::string& out) {
     auto src = readFile(path);
     if (!src) {
@@ -182,6 +217,12 @@ int main(int argc, char** argv) {
     if (cmd == "check-samples" && args.size() == 2) return cmdCheckSamples(args[1]);
 
 #if HMR_HAVE_LLVM
+    if (cmd == "dump-ir" && args.size() >= 2) {
+        bool optimize = false;
+        for (std::size_t i = 2; i < args.size(); ++i)
+            if (args[i] == "--opt" || args[i] == "-O") optimize = true;
+        return cmdDumpIr(args[1], optimize);
+    }
     if (cmd == "compile" && args.size() >= 2) {
         std::string out = "a.so";
         for (std::size_t i = 2; i + 1 < args.size(); ++i)

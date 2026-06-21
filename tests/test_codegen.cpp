@@ -24,6 +24,7 @@
 #include <string>
 
 #include "Test.hpp"
+#include "hmr/backend/Backend.hpp"
 #include "hmr/module/ModuleManager.hpp"
 #include "hmr/pipeline/Compiler.hpp"
 #include "hmr/runtime/Runtime.hpp"
@@ -43,6 +44,15 @@ std::string readSample(const std::string& name) {
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+
+// Count non-overlapping occurrences of `needle` in `hay` (for IR marker checks).
+std::size_t countOccurrences(const std::string& hay, const std::string& needle) {
+    std::size_t n = 0;
+    for (std::size_t i = hay.find(needle); i != std::string::npos;
+         i = hay.find(needle, i + needle.size()))
+        ++n;
+    return n;
 }
 
 // A per-run-unique scratch path for a compiled module, removed on destruction.
@@ -125,6 +135,58 @@ TEST(Codegen, IrExposesEntryPointsAndRegexGuard) {
     CHECK(ir->find("@hmr_rt_str_eq") == std::string::npos);
     // Topology hiding drops internal headers.
     CHECK(ir->find("@hmr_rt_delete_header") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// Backend::optimizeIR — the engine behind `hmrc dump-ir --opt`. Proves both
+// stages of the IR pipeline run: the custom HmrAttributePass (adds `nounwind`
+// at every level) and the standard -O<n> pipeline (marks tail calls and folds
+// the straight-line basic-block chain only at O>0). The before/after pair is the
+// "LLVM IR examples (before/after optimization)" deliverable.
+// ---------------------------------------------------------------------------
+TEST(Codegen, OptimizeIrRunsCustomPassAndOptPipeline) {
+    auto src = readSample("topology_hiding.hmr");
+    REQUIRE(!src.empty());
+
+    hmr::pipeline::Compiler comp;
+    auto before = comp.compileToIR(src);
+    REQUIRE(before.has_value());
+    // The generator emits no attributes / tail calls and a basic-block chain.
+    const std::size_t branchesBefore = countOccurrences(*before, "br label");
+    CHECK(before->find("nounwind") == std::string::npos);
+    CHECK(before->find("tail call") == std::string::npos);
+    CHECK(branchesBefore > 1);
+
+    hmr::backend::Backend backend;
+
+    // -O3: custom pass + full pipeline. nounwind appears, calls become tail
+    // calls, and the trivial block chain folds away.
+    hmr::backend::BackendOptions o3;
+    o3.optLevel = 3;
+    auto opt3 = backend.optimizeIR(*before, o3);
+    REQUIRE(opt3.has_value());
+    CHECK(opt3->find("@hmr_apply(") != std::string::npos);  // entry point kept
+    CHECK(opt3->find("nounwind") != std::string::npos);     // HmrAttributePass
+    CHECK(opt3->find("tail call") != std::string::npos);    // -O3
+    CHECK(countOccurrences(*opt3, "br label") < branchesBefore);  // folded
+
+    // -O0: the custom pass still runs (nounwind present) but the opt pipeline
+    // does not mark tail calls — isolating the two contributions.
+    hmr::backend::BackendOptions o0;
+    o0.optLevel = 0;
+    auto opt0 = backend.optimizeIR(*before, o0);
+    REQUIRE(opt0.has_value());
+    CHECK(opt0->find("nounwind") != std::string::npos);   // custom pass, any -O
+    CHECK(opt0->find("tail call") == std::string::npos);  // no -O0 tail marking
+}
+
+// ---------------------------------------------------------------------------
+// optimizeIR surfaces a diagnostic (rather than crashing) on malformed IR.
+// ---------------------------------------------------------------------------
+TEST(Codegen, OptimizeIrRejectsInvalidIr) {
+    hmr::backend::Backend backend;
+    auto bad = backend.optimizeIR("this is not llvm ir");
+    CHECK(!bad.has_value());
 }
 
 // ---------------------------------------------------------------------------
