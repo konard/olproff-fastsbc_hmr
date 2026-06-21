@@ -13,7 +13,7 @@ into three honest buckets:
 The authority for keyword spelling is
 [oracle-hmr-reference.md](./oracle-hmr-reference.md); the formal grammar is
 [`grammar/Hmr.g4`](../grammar/Hmr.g4). "Lowered" rows are grounded in
-`src/codegen/IrGenerator.cpp`.
+`src/codegen/ir_generator.cpp`.
 
 ## Block structure
 
@@ -68,6 +68,7 @@ The authority for keyword spelling is
 | `uri-user-param` / `uri-param-name` / `uri-param` | ⬜ | URI parameter access — skipped |
 | `uri-header-name` / `uri-header` | ⬜ | embedded URI headers — skipped |
 | `status-code` / `reason-phrase` | ⬜ | status-line elements — skipped |
+| `uri-user-only` / `uri-phone-number-only` | ⬜ | Oracle 10.1.0 user-part refinements — recognized, skipped |
 
 Element rules whose `type` is not yet lowered are skipped (no-op) rather than
 miscompiled.
@@ -133,5 +134,5 @@ The broader Oracle catalogue (`$REPLY_IP`, `$TARGET_IP`, the per-header
 `$<HDR>_PHONE` families, `$ORIGINAL`, `$CALL_ID`, `$TIMESTAMP_UTC`, `$CRLF`, …)
 is documented in [oracle-hmr-reference.md](./oracle-hmr-reference.md) and parses,
 but only the IDs above currently have runtime backing; others resolve to empty.
-Adding one is a localized change: extend `HmrVarId`, the `variableId` map in the
-generator, and the host's `setVar` calls.
+Adding one is a localized change: extend `HmrVarId`, the `variable_id` map in the
+generator, and the host's `set_var` calls.

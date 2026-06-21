@@ -86,6 +86,9 @@ std::optional<ElementType> AstFactory::element_type(std::string_view s) {
         std::pair{std::string_view{"uri-header"}, ElementType::UriHeader},
         std::pair{std::string_view{"status-code"}, ElementType::StatusCode},
         std::pair{std::string_view{"reason-phrase"}, ElementType::ReasonPhrase},
+        std::pair{std::string_view{"uri-user-only"}, ElementType::UriUserOnly},
+        std::pair{std::string_view{"uri-phone-number-only"},
+                  ElementType::UriPhoneNumberOnly},
     };
     return lookup(table, s);
 }
@@ -177,6 +180,8 @@ std::string_view AstFactory::to_string(ElementType t) {
         case ElementType::UriHeader: return "uri-header";
         case ElementType::StatusCode: return "status-code";
         case ElementType::ReasonPhrase: return "reason-phrase";
+        case ElementType::UriUserOnly: return "uri-user-only";
+        case ElementType::UriPhoneNumberOnly: return "uri-phone-number-only";
     }
     return "?";
 }

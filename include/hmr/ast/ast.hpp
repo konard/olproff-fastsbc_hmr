@@ -68,6 +68,12 @@ enum class ElementType : std::uint8_t {
     UriHeader,
     StatusCode,
     ReasonPhrase,
+    // Oracle 10.1.0 additions: the user part stripped of user-parameters, and the
+    // bare phone number. Recognized by the grammar; manipulation is not yet
+    // lowered (they join the skipped element kinds — see
+    // docs/compatibility-matrix.md).
+    UriUserOnly,
+    UriPhoneNumberOnly,
 };
 
 // --- comparison-type -------------------------------------------------------

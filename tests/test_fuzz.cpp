@@ -64,7 +64,7 @@ const std::vector<std::string> kElementTypes = {
     "header-value", "header-param-name", "header-param", "uri-display",
     "uri-user",     "uri-user-param",    "uri-host",     "uri-port",
     "uri-param-name", "uri-param",       "uri-header-name", "uri-header",
-    "status-code",  "reason-phrase"};
+    "status-code",  "reason-phrase",     "uri-user-only", "uri-phone-number-only"};
 const std::vector<std::string> kComparisons = {
     "case-sensitive", "case-insensitive",     "pattern-rule",
     "boolean",        "refer-case-sensitive", "refer-case-insensitive"};

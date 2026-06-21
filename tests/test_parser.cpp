@@ -100,4 +100,29 @@ TEST(Parser, RoundTripThroughVisitor) {
     CHECK_EQ(r2->header_rules[0].element_rules.size(), std::size_t{1});
 }
 
+// The Oracle 10.1.0 ACLI adds two element `type` values (uri-user-only,
+// uri-phone-number-only). The grammar must recognize them (they parse to the
+// matching enum) even though the back-ends do not yet lower their manipulation.
+TEST(Parser, Recognizes_10_1_0_ElementTypes) {
+    auto r = Parser::parse_string(
+        "sip-manipulation\n"
+        "        header-rule\n"
+        "                header-name  From\n"
+        "                action  manipulate\n"
+        "                element-rule\n"
+        "                        name  u\n"
+        "                        type  uri-user-only\n"
+        "                        action  store\n"
+        "                element-rule\n"
+        "                        name  p\n"
+        "                        type  uri-phone-number-only\n"
+        "                        action  store\n");
+    REQUIRE(r.has_value());
+    REQUIRE(r->header_rules.size() == 1);
+    const HeaderRule& hr = r->header_rules[0];
+    REQUIRE(hr.element_rules.size() == 2);
+    CHECK_EQ(hr.element_rules[0].type, ElementType::UriUserOnly);
+    CHECK_EQ(hr.element_rules[1].type, ElementType::UriPhoneNumberOnly);
+}
+
 TEST_MAIN()
