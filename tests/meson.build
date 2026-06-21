@@ -49,6 +49,17 @@ if enable_llvm
     cpp_args: hmr_warn_args + ['-DHMR_SAMPLES_DIR="' + samples_dir + '"'],
     export_dynamic: true)
   test('codegen', test_codegen, suite: 'unit', timeout: 120)
+
+  # Differential test: the interpreter (oracle) must match the compiled .so on
+  # every sample. Compiles each sample, so it needs the full pipeline + the
+  # interpreter, and (like test_codegen) must export hmr_rt_* for the loaded
+  # module to resolve against.
+  test_interp = executable('test_interp', 'test_interp.cpp',
+    dependencies: [hmr_interp_dep, hmr_pipeline_dep, hmr_backend_dep,
+                   hmr_module_dep, hmr_runtime_dep],
+    cpp_args: hmr_warn_args + ['-DHMR_SAMPLES_DIR="' + samples_dir + '"'],
+    export_dynamic: true)
+  test('interp', test_interp, suite: 'unit', timeout: 180)
 endif
 
 valid_samples = [
