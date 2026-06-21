@@ -165,6 +165,26 @@ hmr_interp_dep = declare_dependency(
   dependencies: [hmr_frontend_dep, hmr_runtime_dep])
 
 # ---------------------------------------------------------------------------
+# hmr_cppgen — the "GCC approach" back-end: AST → standalone C++ source. The
+# counterfactual the issue rejects ("no intermediate C++ code, no … GCC
+# toolchain dependency"). benchmarks/ compiles the same ruleset both this way
+# (C++ → g++ -O3 -shared) and via the LLVM-direct path to compare compile and
+# apply time. It reuses codegen/lowering.hpp, so it lowers each node identically
+# to the IR generator; it has no LLVM dependency (AST + runtime header only) and
+# so builds even in a no-LLVM configuration.
+# ---------------------------------------------------------------------------
+libhmr_cppgen = static_library('hmr_cppgen',
+  'src/codegen/cpp_generator.cpp',
+  include_directories: hmr_inc,
+  dependencies: hmr_frontend_dep,
+  cpp_args: hmr_warn_args)
+
+hmr_cppgen_dep = declare_dependency(
+  include_directories: hmr_inc,
+  link_with: libhmr_cppgen,
+  dependencies: hmr_frontend_dep)
+
+# ---------------------------------------------------------------------------
 # LLVM-backed layers — codegen (AST → IR), backend (IR → object), module
 # loader (dlopen + RCU hot-swap) and the pipeline Facade. The front-end CLI
 # subcommands work without LLVM; `dump-ir`/`compile` need it, so they are gated
@@ -246,4 +266,21 @@ hmrc = executable('hmrc', 'src/tools/hmrc.cpp',
 # ---------------------------------------------------------------------------
 if get_option('build_tests')
   subdir('tests')
+endif
+
+# ---------------------------------------------------------------------------
+# Benchmarks — the review-required performance comparisons (vs the interpreter
+# baseline and vs the GCC approach). bench_frontend is LLVM-free (parse +
+# optimize + interpret); bench_pipeline needs the LLVM pipeline + module loader
+# and the C++ "GCC approach" back-end. Gated inside benchmarks/meson.build.
+# ---------------------------------------------------------------------------
+if get_option('build_benchmarks')
+  subdir('benchmarks')
+endif
+
+# ---------------------------------------------------------------------------
+# Examples — end-to-end host integration. Needs the full LLVM pipeline.
+# ---------------------------------------------------------------------------
+if get_option('build_examples') and enable_llvm
+  subdir('examples')
 endif
