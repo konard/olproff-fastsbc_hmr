@@ -8,19 +8,23 @@
 
 #include "hmr/runtime/sip_message.hpp"
 
-#include <cctype>
-
 #include "hmr/runtime/uri.hpp"
 
 namespace hmr::runtime {
 
+// Branchless ASCII lowercase. SIP header field-names are US-ASCII tokens
+// (RFC 3261 §7.3 / §25.1), so locale-aware std::tolower is both unnecessary and,
+// because it routes through the C locale on every character, far too slow for
+// the per-packet header lookups this powers (find/get_header run O(rules ×
+// headers) times per message — the hottest loop in the data path).
+constexpr char ascii_to_lower(char c) noexcept {
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
 bool iequals(std::string_view a, std::string_view b) noexcept {
     if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        unsigned char ca = static_cast<unsigned char>(a[i]);
-        unsigned char cb = static_cast<unsigned char>(b[i]);
-        if (std::tolower(ca) != std::tolower(cb)) return false;
-    }
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (ascii_to_lower(a[i]) != ascii_to_lower(b[i])) return false;
     return true;
 }
 
