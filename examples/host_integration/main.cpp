@@ -43,7 +43,7 @@ sip-manipulation TopologyHiding
                         name         rewriteHost
                         type         uri-host
                         action       replace
-                        match-value  internal\.local
+                        match-value  internal.local
                         new-value    $LOCAL_IP
         header-rule
                 name            dropServer
@@ -72,7 +72,7 @@ sip-manipulation TopologyHiding
                         name         rewriteHost
                         type         uri-host
                         action       replace
-                        match-value  internal\.local
+                        match-value  internal.local
                         new-value    $LOCAL_IP
         header-rule
                 name            dropServer
