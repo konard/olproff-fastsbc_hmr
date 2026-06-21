@@ -1,0 +1,36 @@
+# A single header-rule that drills into one header with several element-rules,
+# each rewriting a different part of the SIP URI. Demonstrates nested
+# element-rule blocks under one manipulate action.
+sip-manipulation NestedElements
+        header-rule
+                name         rewriteContact
+                header-name  Contact
+                action       manipulate
+                msg-type     request
+                element-rule
+                        name    setHost
+                        type    uri-host
+                        action  replace
+                        comparison-type  pattern-rule
+                        match-value  .*
+                        new-value    $LOCAL_IP
+                element-rule
+                        name    setPort
+                        type    uri-port
+                        action  replace
+                        comparison-type  pattern-rule
+                        match-value  .*
+                        new-value    $LOCAL_PORT
+                element-rule
+                        name    setUser
+                        type    uri-user
+                        action  replace
+                        match-value  internal
+                        new-value    sbc
+                element-rule
+                        name    setDisplay
+                        type    uri-display
+                        action  replace
+                        comparison-type  pattern-rule
+                        match-value  .*
+                        new-value    Carrier

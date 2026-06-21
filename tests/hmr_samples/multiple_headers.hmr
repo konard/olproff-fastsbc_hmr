@@ -1,0 +1,39 @@
+# Several independent header-rules in one manipulation, each targeting a
+# different header with a different action (add / delete / manipulate).
+sip-manipulation MultipleHeaders
+        description  "Independent rules over distinct headers"
+
+        header-rule
+                name         advertiseAllow
+                header-name  Allow
+                action       add
+                new-value    INVITE,ACK,BYE,CANCEL,OPTIONS
+
+        header-rule
+                name         advertiseSupported
+                header-name  Supported
+                action       add
+                new-value    100rel,timer
+
+        header-rule
+                name         dropServer
+                header-name  Server
+                action       delete-header
+
+        header-rule
+                name         rewriteUserAgent
+                header-name  User-Agent
+                action       manipulate
+                element-rule
+                        name    setUserAgent
+                        type    header-value
+                        action  replace
+                        comparison-type  pattern-rule
+                        match-value  .*
+                        new-value    SBC/1.0
+
+        header-rule
+                name         tagIngressRealm
+                header-name  X-Ingress-Realm
+                action       add
+                new-value    $REALM

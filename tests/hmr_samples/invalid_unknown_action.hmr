@@ -1,0 +1,7 @@
+# NEGATIVE TEST: 'frobnicate' is not a valid header-rule action, so the parser
+# must reject this file.
+sip-manipulation BadAction
+        header-rule
+                name  oops
+                header-name  From
+                action  frobnicate

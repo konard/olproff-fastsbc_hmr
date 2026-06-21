@@ -1,0 +1,9 @@
+# NEGATIVE TEST: the header-name value opens a quoted string that is never
+# closed before end-of-line. Blocks in HMR are keyword-delimited (not
+# indentation-sensitive), so this is now a *lexical* error: the ANTLR lexer
+# cannot match a STRING token and reports an invalid-character error, which the
+# parser collects via its error listener instead of crashing.
+sip-manipulation BadString
+        header-rule
+                name  x
+                header-name  "From

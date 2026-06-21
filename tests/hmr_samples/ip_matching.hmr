@@ -1,0 +1,45 @@
+# IP matching. Oracle's element-rule `match-val-type ip` selects a specialized
+# address matcher instead of the regex engine. The compiler reads the shape of
+# the match-value and emits the right test — an exact-address compare, a subnet
+# (CIDR or dotted-netmask) membership test, or an inclusive low-high range test
+# — so address checks never touch std::regex. Each header-rule below inspects
+# the host component of a SIP URI.
+sip-manipulation IpMatching
+        # Subnet membership (CIDR): rewrite Contacts whose host is in 10.0.0.0/8.
+        header-rule
+                name         maskPrivate10
+                header-name  Contact
+                action       manipulate
+                element-rule
+                        name    net10Host
+                        type    uri-host
+                        action  replace
+                        match-val-type  ip
+                        match-value  10.0.0.0/8
+                        new-value    $LOCAL_IP
+
+        # Exact address: rewrite a Via host that is exactly the gateway.
+        header-rule
+                name         tagGateway
+                header-name  Via
+                action       manipulate
+                element-rule
+                        name    gatewayHost
+                        type    uri-host
+                        action  replace
+                        match-val-type  ip
+                        match-value  192.168.1.1
+                        new-value    $LOCAL_IP
+
+        # Inclusive range: hide hosts within a contiguous address span.
+        header-rule
+                name         maskRange
+                header-name  Route
+                action       manipulate
+                element-rule
+                        name    rangeHost
+                        type    uri-host
+                        action  replace
+                        match-val-type  ip
+                        match-value  172.16.0.1-172.16.255.254
+                        new-value    $LOCAL_IP

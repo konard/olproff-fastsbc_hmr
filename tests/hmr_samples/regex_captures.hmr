@@ -1,0 +1,28 @@
+# Pattern matching with capture groups. match-value is a regular expression;
+# captured groups are referenced in new-value as $1..$N (Oracle's $CAPTURE_N),
+# and a previous rule's capture is reached with the $rule.$N back-reference.
+sip-manipulation RegexCaptures
+        header-rule
+                name         storeFromParts
+                header-name  From
+                action       store
+                comparison-type  pattern-rule
+                match-value  sip:([^@]+)@([^;>]+)
+
+        header-rule
+                name         swapUserDomain
+                header-name  From
+                action       manipulate
+                element-rule
+                        name    flipUser
+                        type    uri-user
+                        action  replace
+                        comparison-type  pattern-rule
+                        match-value  ([a-z0-9]+)\.([a-z0-9]+)
+                        new-value    $2.$1
+
+        header-rule
+                name         echoStoredUser
+                header-name  X-Original-User
+                action       add
+                new-value    $storeFromParts.$1

@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "issue-*"]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Full build: front-end + LLVM-backed codegen/backend/module/pipeline, the
+  # whole test suite, and the (reported, non-gating) benchmarks. Built with
+  # `meson --werror` so any warning fails the job.
+  # ---------------------------------------------------------------------------
+  build-test:
+    name: build + test (LLVM ${{ matrix.llvm }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: [18]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build g++ cmake unzip curl default-jre \
+            llvm-${{ matrix.llvm }}-dev lld-${{ matrix.llvm }}
+          meson --version
+          g++ --version | head -1
+          llvm-config-${{ matrix.llvm }} --version
+
+      # The ANTLR4 tool jar + C++ runtime are not packaged; setup_antlr.sh
+      # fetches+builds a pinned copy. It is idempotent, so caching its prefix
+      # turns re-runs into a no-op. Key on the script so a version bump busts it.
+      - name: Cache ANTLR4 (tool jar + C++ runtime)
+        uses: actions/cache@v4
+        with:
+          path: .antlr
+          key: antlr-${{ runner.os }}-${{ hashFiles('scripts/setup_antlr.sh') }}
+
+      - name: Setup ANTLR4
+        # setup_antlr.sh prints `ANTLR_JAR=…` / `ANTLR_INC=…` / `ANTLR_LIBDIR=…`
+        # on stdout — exactly the KEY=VALUE form $GITHUB_ENV wants — so `tee`
+        # exports them to later steps while still echoing them to the log.
+        run: scripts/setup_antlr.sh "$PWD/.antlr" | tee -a "$GITHUB_ENV"
+
+      - name: Configure (Meson, LLVM, warnings as errors)
+        run: >
+          meson setup builddir --werror
+          -Dbuildtype=release
+          -Denable_llvm=true
+          -Dbuild_tests=true
+          -Dbuild_benchmarks=true
+          -Dbuild_examples=true
+          -Dantlr_jar="$ANTLR_JAR"
+          -Dantlr_inc="$ANTLR_INC"
+          -Dantlr_libdir="$ANTLR_LIBDIR"
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
+
+      - name: Benchmarks (reported, non-gating)
+        run: |
+          ./builddir/benchmarks/bench_frontend || true
+          ./builddir/benchmarks/bench_pipeline || true
+
+  # ---------------------------------------------------------------------------
+  # Front-end-only build: proves the LLVM-free core (lexer/parser/optimizer/
+  # interpreter/cppgen/runtime + the front-end hmrc subcommands) still builds
+  # and passes when LLVM is absent (-Denable_llvm=false). The example and the
+  # LLVM benchmark are gated off automatically; bench_frontend still builds.
+  # ---------------------------------------------------------------------------
+  frontend-only:
+    name: build + test (front-end only, no LLVM)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build g++ cmake unzip curl default-jre
+          meson --version
+          g++ --version | head -1
+
+      - name: Cache ANTLR4 (tool jar + C++ runtime)
+        uses: actions/cache@v4
+        with:
+          path: .antlr
+          key: antlr-${{ runner.os }}-${{ hashFiles('scripts/setup_antlr.sh') }}
+
+      - name: Setup ANTLR4
+        run: scripts/setup_antlr.sh "$PWD/.antlr" | tee -a "$GITHUB_ENV"
+
+      - name: Configure (Meson, no LLVM, warnings as errors)
+        run: >
+          meson setup builddir-fe --werror
+          -Dbuildtype=release
+          -Denable_llvm=false
+          -Dbuild_tests=true
+          -Dbuild_benchmarks=true
+          -Dantlr_jar="$ANTLR_JAR"
+          -Dantlr_inc="$ANTLR_INC"
+          -Dantlr_libdir="$ANTLR_LIBDIR"
+
+      - name: Build
+        run: meson compile -C builddir-fe
+
+      - name: Test
+        run: meson test -C builddir-fe --print-errorlogs
+
+      - name: Front-end benchmark (reported, non-gating)
+        run: ./builddir-fe/benchmarks/bench_frontend || true

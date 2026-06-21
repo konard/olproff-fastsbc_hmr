@@ -1,0 +1,8 @@
+# The simplest valid ruleset: one manipulation with a single header-rule that
+# unconditionally adds a header. This is the smallest input the parser accepts.
+sip-manipulation MinimalRuleset
+        header-rule
+                name         addSupported
+                header-name  Supported
+                action       add
+                new-value    100rel

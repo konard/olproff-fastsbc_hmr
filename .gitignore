@@ -1,0 +1,47 @@
+# Meson build directories
+/build/
+/build-*/
+/builddir/
+/builddir-*/
+out/
+.cache/
+compile_commands.json
+
+# ANTLR4 toolchain prefix fetched/built by scripts/setup_antlr.sh
+/.antlr/
+
+# Generated ANTLR sources (built into the build dir; guard against stray
+# in-tree generation if a tool is run by hand with the wrong output path).
+/grammar/generated/
+/grammar/Hmr*.cpp
+/grammar/Hmr*.h
+/grammar/*.interp
+/grammar/*.tokens
+
+# Object files, libraries, binaries
+*.o
+*.obj
+*.so
+*.so.*
+*.a
+*.dylib
+*.dll
+*.exe
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Temporary HMR compilation artifacts
+/tmp/hmr_*
+hmr_*.ll
+hmr_*.o
+hmr_*.so
+
+# Locally captured CI / build logs
+/ci-logs/
+
+# Generated probe IR (regenerate from the .c with clang -S -emit-llvm)
+experiments/*.ll
