@@ -5,7 +5,7 @@
 // comparison, canonical IP equality (v4 & v6), CIDR / dotted-mask subnet
 // membership, inclusive address ranges, and case-insensitive FQDN comparison.
 
-#include "Test.hpp"
+#include "test.hpp"
 #include "hmr/runtime/matchers.hpp"
 
 using namespace hmr::runtime;

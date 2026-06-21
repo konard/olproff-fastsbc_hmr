@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 //
-// Unit tests for the recursive-descent parser.
+// Unit tests for the ANTLR-backed parser (front-end visitor).
 
-#include "Test.hpp"
-#include "hmr/ast/AstVisitor.hpp"
-#include "hmr/parser/Parser.hpp"
+#include "test.hpp"
+#include "hmr/ast/ast_visitor.hpp"
+#include "hmr/parser/parser.hpp"
 
 using namespace hmr::ast;
 using namespace hmr::parser;
@@ -34,41 +34,41 @@ constexpr const char* kSample =
 }  // namespace
 
 TEST(Parser, ParsesRulesetStructure) {
-    auto r = Parser::parseString(kSample);
+    auto r = Parser::parse_string(kSample);
     REQUIRE(r.has_value());
     const Ruleset& rs = *r;
     CHECK_EQ(rs.name, std::string("TopoHiding"));
     CHECK_EQ(rs.description, std::string("hide internal topology"));
-    REQUIRE(rs.headerRules.size() == 2);
+    REQUIRE(rs.header_rules.size() == 2);
 
-    const HeaderRule& hr = rs.headerRules[0];
+    const HeaderRule& hr = rs.header_rules[0];
     CHECK_EQ(hr.name, std::string("fixFrom"));
-    CHECK_EQ(hr.headerName, std::string("From"));
+    CHECK_EQ(hr.header_name, std::string("From"));
     CHECK_EQ(hr.action, HeaderAction::Manipulate);
     CHECK_EQ(hr.comparison, ComparisonType::CaseSensitive);
-    CHECK_EQ(hr.msgType, MsgType::Request);
+    CHECK_EQ(hr.msg_type, MsgType::Request);
     REQUIRE(hr.methods.size() == 2);
     CHECK_EQ(hr.methods[0], std::string("INVITE"));
     CHECK_EQ(hr.methods[1], std::string("REGISTER"));
 
-    REQUIRE(hr.elementRules.size() == 1);
-    const ElementRule& er = hr.elementRules[0];
+    REQUIRE(hr.element_rules.size() == 1);
+    const ElementRule& er = hr.element_rules[0];
     CHECK_EQ(er.type, ElementType::UriUser);
     CHECK_EQ(er.action, ElementAction::Replace);
-    CHECK_EQ(er.newValue.literalText(), std::string("anonymous"));
+    CHECK_EQ(er.new_value.literal_text(), std::string("anonymous"));
 
-    const HeaderRule& hr2 = rs.headerRules[1];
-    CHECK_EQ(hr2.headerName, std::string("Server"));
+    const HeaderRule& hr2 = rs.header_rules[1];
+    CHECK_EQ(hr2.header_name, std::string("Server"));
     CHECK_EQ(hr2.action, HeaderAction::DeleteHeader);
 }
 
 TEST(Parser, MissingSipManipulationIsError) {
-    auto r = Parser::parseString("header-rule\n        name  x\n");
+    auto r = Parser::parse_string("header-rule\n        name  x\n");
     CHECK(!r.has_value());
 }
 
 TEST(Parser, UnknownEnumValueIsError) {
-    auto r = Parser::parseString(
+    auto r = Parser::parse_string(
         "sip-manipulation\n"
         "        header-rule\n"
         "                action  bogus-action\n");
@@ -76,26 +76,28 @@ TEST(Parser, UnknownEnumValueIsError) {
 }
 
 TEST(Parser, UnknownAttributeIsWarningNotError) {
-    auto r = Parser::parseString(
+    auto r = Parser::parse_string(
         "sip-manipulation\n"
         "        future-attr  somevalue\n"
         "        header-rule\n"
         "                header-name  X\n"
         "                action  delete-header\n");
     REQUIRE(r.has_value());
-    CHECK(r->headerRules.size() == 1);
+    CHECK(r->header_rules.size() == 1);
 }
 
 TEST(Parser, RoundTripThroughVisitor) {
-    auto r = Parser::parseString(kSample);
+    auto r = Parser::parse_string(kSample);
     REQUIRE(r.has_value());
     // The pretty-printed text should itself re-parse to an equivalent ruleset.
-    std::string text = toHmrText(*r);
-    auto r2 = Parser::parseString(text);
+    std::string text = to_hmr_text(*r);
+    auto r2 = Parser::parse_string(text);
     REQUIRE(r2.has_value());
     CHECK_EQ(r2->name, r->name);
-    CHECK_EQ(r2->headerRules.size(), r->headerRules.size());
-    REQUIRE(r2->headerRules.size() == 2);
-    CHECK_EQ(r2->headerRules[0].action, HeaderAction::Manipulate);
-    CHECK_EQ(r2->headerRules[0].elementRules.size(), std::size_t{1});
+    CHECK_EQ(r2->header_rules.size(), r->header_rules.size());
+    REQUIRE(r2->header_rules.size() == 2);
+    CHECK_EQ(r2->header_rules[0].action, HeaderAction::Manipulate);
+    CHECK_EQ(r2->header_rules[0].element_rules.size(), std::size_t{1});
 }
+
+TEST_MAIN()

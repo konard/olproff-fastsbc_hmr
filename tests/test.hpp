@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Test.hpp — a tiny, dependency-free unit-test harness.
+// test.hpp — a tiny, dependency-free unit-test harness.
 //
 // Self-contained so CI needs no network access to fetch a framework. Each test
 // is registered with TEST(suite, name); assertions record failures and keep

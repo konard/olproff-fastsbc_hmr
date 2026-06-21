@@ -13,7 +13,7 @@
 #include <string>
 #include <string_view>
 
-#include "Test.hpp"
+#include "test.hpp"
 #include "hmr/runtime/arena.hpp"
 #include "hmr/runtime/context.hpp"
 #include "hmr/runtime/hmr_runtime.h"

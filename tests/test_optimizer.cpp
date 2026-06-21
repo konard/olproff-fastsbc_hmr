@@ -2,16 +2,16 @@
 //
 // Unit tests for the CRTP optimizer passes.
 
-#include "Test.hpp"
-#include "hmr/optimizer/Optimizer.hpp"
-#include "hmr/parser/Parser.hpp"
+#include "test.hpp"
+#include "hmr/optimizer/optimizer.hpp"
+#include "hmr/parser/parser.hpp"
 
 using namespace hmr::ast;
 using namespace hmr::opt;
 using namespace hmr::parser;
 
 namespace {
-std::size_t changesFor(const OptimizationReport& r, std::string_view pass) {
+std::size_t changes_for(const OptimizationReport& r, std::string_view pass) {
     for (const auto& p : r.passes)
         if (p.name == pass) return p.changes;
     return 0;
@@ -19,7 +19,7 @@ std::size_t changesFor(const OptimizationReport& r, std::string_view pass) {
 }  // namespace
 
 TEST(Optimizer, DeduplicatesIdenticalRules) {
-    auto r = Parser::parseString(
+    auto r = Parser::parse_string(
         "sip-manipulation\n"
         "        header-rule\n"
         "                header-name  Server\n"
@@ -31,12 +31,12 @@ TEST(Optimizer, DeduplicatesIdenticalRules) {
     Ruleset rs = *r;
     Optimizer opt;
     OptimizationReport rep = opt.optimize(rs);
-    CHECK_EQ(rs.headerRules.size(), std::size_t{1});
-    CHECK(changesFor(rep, "deduplication") >= 1);
+    CHECK_EQ(rs.header_rules.size(), std::size_t{1});
+    CHECK(changes_for(rep, "deduplication") >= 1);
 }
 
 TEST(Optimizer, KeepsDistinctAddRules) {
-    auto r = Parser::parseString(
+    auto r = Parser::parse_string(
         "sip-manipulation\n"
         "        header-rule\n"
         "                header-name  X-Tag\n"
@@ -51,11 +51,11 @@ TEST(Optimizer, KeepsDistinctAddRules) {
     Optimizer opt;
     opt.optimize(rs);
     // Two identical `add` rules legitimately add two headers; do NOT dedup.
-    CHECK_EQ(rs.headerRules.size(), std::size_t{2});
+    CHECK_EQ(rs.header_rules.size(), std::size_t{2});
 }
 
 TEST(Optimizer, EliminatesDeadRules) {
-    auto r = Parser::parseString(
+    auto r = Parser::parse_string(
         "sip-manipulation\n"
         "        header-rule\n"
         "                header-name  X\n"
@@ -67,12 +67,12 @@ TEST(Optimizer, EliminatesDeadRules) {
     Ruleset rs = *r;
     Optimizer opt;
     OptimizationReport rep = opt.optimize(rs);
-    CHECK_EQ(rs.headerRules.size(), std::size_t{1});
-    CHECK(changesFor(rep, "dead-code-elimination") >= 1);
+    CHECK_EQ(rs.header_rules.size(), std::size_t{1});
+    CHECK(changes_for(rep, "dead-code-elimination") >= 1);
 }
 
 TEST(Optimizer, SimplifiesLiteralRegex) {
-    auto r = Parser::parseString(
+    auto r = Parser::parse_string(
         "sip-manipulation\n"
         "        header-rule\n"
         "                header-name  From\n"
@@ -83,14 +83,14 @@ TEST(Optimizer, SimplifiesLiteralRegex) {
     Ruleset rs = *r;
     Optimizer opt;
     OptimizationReport rep = opt.optimize(rs);
-    REQUIRE(rs.headerRules.size() == 1);
-    CHECK_EQ(rs.headerRules[0].comparison, ComparisonType::CaseSensitive);
-    CHECK_EQ(rs.headerRules[0].matchValue.literalText(), std::string("INVITE"));
-    CHECK(changesFor(rep, "pattern-simplification") >= 1);
+    REQUIRE(rs.header_rules.size() == 1);
+    CHECK_EQ(rs.header_rules[0].comparison, ComparisonType::CaseSensitive);
+    CHECK_EQ(rs.header_rules[0].match_value.literal_text(), std::string("INVITE"));
+    CHECK(changes_for(rep, "pattern-simplification") >= 1);
 }
 
 TEST(Optimizer, BuildsDecisionPlan) {
-    auto r = Parser::parseString(
+    auto r = Parser::parse_string(
         "sip-manipulation\n"
         "        header-rule\n"
         "                header-name  From\n"
@@ -108,3 +108,5 @@ TEST(Optimizer, BuildsDecisionPlan) {
     // From/from collapse to one group; To is another => 2 groups.
     CHECK_EQ(rep.plan.size(), std::size_t{2});
 }
+
+TEST_MAIN()
