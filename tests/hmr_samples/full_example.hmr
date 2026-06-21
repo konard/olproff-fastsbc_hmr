@@ -33,18 +33,21 @@ sip-manipulation FullExample
                         name         maskHost
                         type         uri-host
                         action       replace
+                        comparison-type  pattern-rule
                         match-value  internal\.example\.com
                         new-value    $LOCAL_IP
                 element-rule
                         name         anonUser
                         type         uri-user
                         action       replace
+                        comparison-type  pattern-rule
                         match-value  .+
                         new-value    anonymous
                 element-rule
                         name         maskDisplay
                         type         uri-display
                         action       replace
+                        comparison-type  pattern-rule
                         match-value  .*
                         new-value    Anonymous
 

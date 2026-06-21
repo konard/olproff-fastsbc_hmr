@@ -13,6 +13,7 @@ sip-manipulation TopologyHiding
                         name  rewriteHost
                         type  uri-host
                         action  replace
+                        comparison-type  pattern-rule
                         match-value  internal\.local
                         new-value  $LOCAL_IP
 

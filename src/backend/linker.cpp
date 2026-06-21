@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// Linker.cpp — drive the system toolchain to produce a shared module.
+// linker.cpp — drive the system toolchain to produce a shared module.
 
-#include "hmr/backend/Linker.hpp"
+#include "hmr/backend/linker.hpp"
 
 #include <fcntl.h>
 #include <spawn.h>
@@ -40,13 +40,13 @@ struct TempFile {
     ~TempFile() { reset(); }
 };
 
-std::string tmpDir() {
+std::string tmp_dir() {
     if (const char* t = std::getenv("TMPDIR"); t && *t) return t;
     return "/tmp";
 }
 
-bool createTemp(TempFile& tf, const char* suffix, std::string& err) {
-    const std::string tmpl = tmpDir() + "/hmrlinkXXXXXX" + suffix;
+bool create_temp(TempFile& tf, const char* suffix, std::string& err) {
+    const std::string tmpl = tmp_dir() + "/hmrlinkXXXXXX" + suffix;
     std::vector<char> buf(tmpl.c_str(), tmpl.c_str() + tmpl.size() + 1);
     const int fd = ::mkstemps(buf.data(), static_cast<int>(std::strlen(suffix)));
     if (fd < 0) {
@@ -59,7 +59,7 @@ bool createTemp(TempFile& tf, const char* suffix, std::string& err) {
     return true;
 }
 
-std::string readAll(const std::string& path) {
+std::string read_all(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     std::ostringstream ss;
     ss << in.rdbuf();
@@ -68,32 +68,32 @@ std::string readAll(const std::string& path) {
 
 }  // namespace
 
-Result<void> Linker::linkSharedObject(const ObjectCode& obj,
-                                      const LinkOptions& opts) {
+Result<void> Linker::link_shared_object(const ObjectCode& obj,
+                                        const LinkOptions& opts) {
     std::string err;
 
-    TempFile objFile;
-    if (!createTemp(objFile, ".o", err)) return make_error(err);
+    TempFile obj_file;
+    if (!create_temp(obj_file, ".o", err)) return make_error(err);
     {
-        std::ofstream out(objFile.path, std::ios::binary | std::ios::trunc);
+        std::ofstream out(obj_file.path, std::ios::binary | std::ios::trunc);
         if (!out) return make_error("linker: cannot open temp object for writing");
         out.write(reinterpret_cast<const char*>(obj.bytes.data()),
                   static_cast<std::streamsize>(obj.bytes.size()));
         if (!out) return make_error("linker: failed writing temp object");
     }
 
-    TempFile logFile;
-    if (!createTemp(logFile, ".log", err)) return make_error(err);
+    TempFile log_file;
+    if (!create_temp(log_file, ".log", err)) return make_error(err);
 
     std::string driver = opts.driver;
     if (driver.empty())
         if (const char* e = std::getenv("HMR_CC"); e && *e) driver = e;
     if (driver.empty()) driver = "cc";
 
-    std::vector<std::string> args = {driver, "-shared", "-o", opts.outputPath,
-                                     objFile.path};
-    if (opts.stripDebug) args.insert(args.begin() + 2, "-Wl,--strip-debug");
-    for (const auto& a : opts.extraArgs) args.push_back(a);
+    std::vector<std::string> args = {driver, "-shared", "-o", opts.output_path,
+                                     obj_file.path};
+    if (opts.strip_debug) args.insert(args.begin() + 2, "-Wl,--strip-debug");
+    for (const auto& a : opts.extra_args) args.push_back(a);
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
@@ -103,7 +103,7 @@ Result<void> Linker::linkSharedObject(const ObjectCode& obj,
     // Route the child's stdout+stderr into the log temp file for diagnostics.
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, logFile.path.c_str(),
+    posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, log_file.path.c_str(),
                                      O_WRONLY | O_CREAT | O_TRUNC, 0644);
     posix_spawn_file_actions_adddup2(&fa, STDOUT_FILENO, STDERR_FILENO);
 
@@ -123,7 +123,7 @@ Result<void> Linker::linkSharedObject(const ObjectCode& obj,
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         const int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
         return make_error("linker: '" + driver + "' failed (exit " +
-                          std::to_string(code) + ")\n" + readAll(logFile.path));
+                          std::to_string(code) + ")\n" + read_all(log_file.path));
     }
     return {};
 }

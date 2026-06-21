@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// ModuleManager.hpp — loads generated HMR modules and hot-swaps them safely.
+// module_manager.hpp — loads generated HMR modules and hot-swaps them safely.
 //
 // A compiled ruleset is a shared object exporting `hmr_apply` + `hmr_module_info`
 // (see hmr_runtime.h). The manager dlopen's such a file, resolves and validates
@@ -27,7 +27,7 @@
 #include <string>
 #include <vector>
 
-#include "hmr/diagnostics/Diagnostics.hpp"
+#include "hmr/diagnostics/diagnostics.hpp"
 #include "hmr/runtime/hmr_runtime.h"
 
 namespace hmr::module {
@@ -37,7 +37,7 @@ namespace hmr::module {
 // by shared_ptr reference counting — the basis of the RCU-style hot swap.
 class LoadedModule {
 public:
-    LoadedModule(void* handle, hmr_apply_fn applyFn, const HmrModuleInfo* info,
+    LoadedModule(void* handle, hmr_apply_fn apply_fn, const HmrModuleInfo* info,
                  std::string path);
     ~LoadedModule();
 
@@ -46,7 +46,7 @@ public:
 
     // Invoke the module's entry point against a message + per-thread context.
     [[nodiscard]] int apply(HmrSipMsg* msg, HmrContext* ctx) const {
-        return applyFn_(msg, ctx);
+        return apply_fn_(msg, ctx);
     }
 
     [[nodiscard]] const HmrModuleInfo& info() const noexcept { return *info_; }
@@ -57,7 +57,7 @@ public:
 
 private:
     void* handle_;
-    hmr_apply_fn applyFn_;
+    hmr_apply_fn apply_fn_;
     const HmrModuleInfo* info_;
     std::string path_;
 };
@@ -68,15 +68,15 @@ enum class ModuleEventKind { Loaded, Reloaded, LoadFailed };
 struct ModuleEvent {
     ModuleEventKind kind;
     std::string path;
-    std::string moduleName;  // from info->name (empty on failure)
-    std::string error;       // populated for LoadFailed
+    std::string module_name;  // from info->name (empty on failure)
+    std::string error;        // populated for LoadFailed
 };
 
 // GoF Observer: implement to react to module lifecycle events.
 class ModuleObserver {
 public:
     virtual ~ModuleObserver() = default;
-    virtual void onModuleEvent(const ModuleEvent& event) = 0;
+    virtual void on_module_event(const ModuleEvent& event) = 0;
 };
 
 class ModuleManager {
@@ -109,7 +109,7 @@ private:
     void notify(const ModuleEvent& event);
 
     std::atomic<std::shared_ptr<const LoadedModule>> current_{nullptr};
-    std::mutex observerMtx_;
+    std::mutex observer_mtx_;
     std::vector<ModuleObserver*> observers_;
 };
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// IrGenerator.cpp — direct AST → LLVM IR lowering via IRBuilder.
+// ir_generator.cpp — direct AST → LLVM IR lowering via IRBuilder.
 //
 // The generator emits one function, `hmr_apply(HmrSipMsg*, HmrContext*)`, whose
 // body is a straight-line sequence of guarded rule applications, plus a static
@@ -13,7 +13,7 @@
 // exactly what Clang emits for the C header on x86-64 SysV (verified against
 // clang-18), so the generated module and the g++-compiled runtime agree.
 
-#include "hmr/codegen/IrGenerator.hpp"
+#include "hmr/codegen/ir_generator.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -36,7 +36,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Host.h"
 
-#include "hmr/ast/AstFactory.hpp"
+#include "hmr/ast/ast_factory.hpp"
 #include "hmr/runtime/hmr_runtime.h"
 
 namespace hmr::codegen {
@@ -50,6 +50,7 @@ using hmr::ast::ElementRule;
 using hmr::ast::ElementType;
 using hmr::ast::HeaderAction;
 using hmr::ast::HeaderRule;
+using hmr::ast::MatchValType;
 using hmr::ast::MsgType;
 using hmr::ast::RefKind;
 using hmr::ast::Ruleset;
@@ -64,7 +65,7 @@ struct IrStr {
 
 // Map a built-in variable name ($LOCAL_IP, ...) to its stable HmrVarId. Unknown
 // names resolve to HMR_VAR_NONE, which the runtime reports as the empty string.
-HmrVarId variableId(std::string_view name) {
+HmrVarId variable_id(std::string_view name) {
     std::string up;
     up.reserve(name.size());
     for (char c : name) up.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
@@ -83,7 +84,7 @@ HmrVarId variableId(std::string_view name) {
 
 // Map an element-rule type to a URI element selector. Returns nullopt for
 // element kinds the v1 generator does not yet manipulate (params, etc.).
-std::optional<uint32_t> uriElement(ElementType t) {
+std::optional<uint32_t> uri_element(ElementType t) {
     switch (t) {
         case ElementType::HeaderValue: return HMR_URI_WHOLE;
         case ElementType::UriDisplay:  return HMR_URI_DISPLAY;
@@ -94,11 +95,20 @@ std::optional<uint32_t> uriElement(ElementType t) {
     }
 }
 
-bool isCaseInsensitive(ComparisonType c) {
+bool is_case_insensitive(ComparisonType c) {
     return c == ComparisonType::CaseInsensitive ||
            c == ComparisonType::ReferCaseInsensitive;
 }
-bool isPattern(ComparisonType c) { return c == ComparisonType::PatternRule; }
+bool is_pattern(ComparisonType c) { return c == ComparisonType::PatternRule; }
+
+// Choose the IP matcher variant from the literal's shape: a '/' means a CIDR /
+// dotted-netmask subnet, a '-' (with no '/') means an inclusive low-high range,
+// otherwise a single address. Mirrors the runtime matchers (matchers.hpp).
+uint32_t ip_match_type(std::string_view pat) {
+    if (pat.find('/') != std::string_view::npos) return HMR_MATCH_IP_MASK;
+    if (pat.find('-') != std::string_view::npos) return HMR_MATCH_IP_RANGE;
+    return HMR_MATCH_IP;
+}
 
 // ---------------------------------------------------------------------------
 // Emitter — builds the module via IRBuilder, walking the AST in Visitor order.
@@ -107,10 +117,10 @@ class Emitter {
 public:
     Emitter(LLVMContext& ctx, Module& mod, const IrGenOptions& opts)
         : ctx_(ctx), mod_(mod), b_(ctx), opts_(opts) {
-        ptrTy_ = PointerType::getUnqual(ctx_);
-        i32Ty_ = Type::getInt32Ty(ctx_);
-        voidTy_ = Type::getVoidTy(ctx_);
-        hmrStrTy_ = StructType::get(ctx_, {ptrTy_, i32Ty_});
+        ptr_ty_ = PointerType::getUnqual(ctx_);
+        i32_ty_ = Type::getInt32Ty(ctx_);
+        void_ty_ = Type::getVoidTy(ctx_);
+        hmr_str_ty_ = StructType::get(ctx_, {ptr_ty_, i32_ty_});
     }
 
     Result<void> emit(const Ruleset& rs, const opt::DecisionPlan& plan,
@@ -146,104 +156,111 @@ private:
     }
 
     // --- runtime callbacks (coerced ABI) -----------------------------------
-    IrStr rtGetHeader(IrStr name) {
+    IrStr rt_get_header(IrStr name) {
         return unpack(b_.CreateCall(
-            rt("hmr_rt_get_header", hmrStrTy_, {ptrTy_, ptrTy_, i32Ty_}),
+            rt("hmr_rt_get_header", hmr_str_ty_, {ptr_ty_, ptr_ty_, i32_ty_}),
             {msg_, name.data, name.len}));
     }
-    void rtSetHeader(IrStr name, IrStr val) {
-        b_.CreateCall(rt("hmr_rt_set_header", i32Ty_,
-                         {ptrTy_, ptrTy_, i32Ty_, ptrTy_, i32Ty_}),
-                      {msg_, name.data, name.len, val.data, val.len});
+    void rt_set_header(IrStr name, IrStr val) {
+        b_.CreateCall(rt("hmr_rt_set_header", i32_ty_,
+                         {ptr_ty_, ptr_ty_, ptr_ty_, i32_ty_, ptr_ty_, i32_ty_}),
+                      {msg_, ctx_arg_, name.data, name.len, val.data, val.len});
     }
-    void rtAddHeader(IrStr name, IrStr val) {
-        b_.CreateCall(rt("hmr_rt_add_header", i32Ty_,
-                         {ptrTy_, ptrTy_, i32Ty_, ptrTy_, i32Ty_}),
-                      {msg_, name.data, name.len, val.data, val.len});
+    void rt_add_header(IrStr name, IrStr val) {
+        b_.CreateCall(rt("hmr_rt_add_header", i32_ty_,
+                         {ptr_ty_, ptr_ty_, ptr_ty_, i32_ty_, ptr_ty_, i32_ty_}),
+                      {msg_, ctx_arg_, name.data, name.len, val.data, val.len});
     }
-    void rtDeleteHeader(IrStr name) {
-        b_.CreateCall(rt("hmr_rt_delete_header", i32Ty_, {ptrTy_, ptrTy_, i32Ty_}),
+    void rt_delete_header(IrStr name) {
+        b_.CreateCall(rt("hmr_rt_delete_header", i32_ty_, {ptr_ty_, ptr_ty_, i32_ty_}),
                       {msg_, name.data, name.len});
     }
-    IrStr rtGetMethod() {
-        return unpack(b_.CreateCall(rt("hmr_rt_get_method", hmrStrTy_, {ptrTy_}),
+    IrStr rt_get_method() {
+        return unpack(b_.CreateCall(rt("hmr_rt_get_method", hmr_str_ty_, {ptr_ty_}),
                                     {msg_}));
     }
-    llvm::Value* rtIsRequest() {
-        return b_.CreateCall(rt("hmr_rt_is_request", i32Ty_, {ptrTy_}), {msg_});
+    llvm::Value* rt_is_request() {
+        return b_.CreateCall(rt("hmr_rt_is_request", i32_ty_, {ptr_ty_}), {msg_});
     }
-    llvm::Value* rtStrEq(IrStr a, IrStr b, bool ci) {
+    llvm::Value* rt_str_eq(IrStr a, IrStr b, bool ci) {
         return b_.CreateCall(
-            rt("hmr_rt_str_eq", i32Ty_, {ptrTy_, i32Ty_, ptrTy_, i32Ty_, i32Ty_}),
+            rt("hmr_rt_str_eq", i32_ty_, {ptr_ty_, i32_ty_, ptr_ty_, i32_ty_, i32_ty_}),
             {a.data, a.len, b.data, b.len, ci32(ci ? 1 : 0)});
     }
-    llvm::Value* rtRegexMatch(unsigned id, IrStr subj) {
+    // Unified match-val-type dispatch (review #2). For HMR_MATCH_REGEX the
+    // runtime uses `regex_id` (and records captures) and ignores `pattern`; for
+    // every other type `pattern` is the literal match-value and `regex_id` is
+    // ignored.
+    llvm::Value* rt_match(uint32_t match_type, IrStr subject, IrStr pattern,
+                          unsigned regex_id) {
         return b_.CreateCall(
-            rt("hmr_rt_regex_match", i32Ty_, {ptrTy_, i32Ty_, ptrTy_, i32Ty_}),
-            {ctx_arg_, ci32(id), subj.data, subj.len});
+            rt("hmr_rt_match", i32_ty_,
+               {ptr_ty_, i32_ty_, ptr_ty_, i32_ty_, ptr_ty_, i32_ty_, i32_ty_}),
+            {ctx_arg_, ci32(match_type), subject.data, subject.len, pattern.data,
+             pattern.len, ci32(regex_id)});
     }
-    IrStr rtGetCapture(unsigned idx) {
+    IrStr rt_get_capture(unsigned idx) {
         return unpack(b_.CreateCall(
-            rt("hmr_rt_get_capture", hmrStrTy_, {ptrTy_, i32Ty_}),
+            rt("hmr_rt_get_capture", hmr_str_ty_, {ptr_ty_, i32_ty_}),
             {ctx_arg_, ci32(idx)}));
     }
-    IrStr rtGetVar(unsigned id) {
-        return unpack(b_.CreateCall(rt("hmr_rt_get_var", hmrStrTy_, {ptrTy_, i32Ty_}),
+    IrStr rt_get_var(unsigned id) {
+        return unpack(b_.CreateCall(rt("hmr_rt_get_var", hmr_str_ty_, {ptr_ty_, i32_ty_}),
                                     {ctx_arg_, ci32(id)}));
     }
-    void rtStore(unsigned slot, IrStr v) {
-        b_.CreateCall(rt("hmr_rt_store", voidTy_, {ptrTy_, i32Ty_, ptrTy_, i32Ty_}),
+    void rt_store(unsigned slot, IrStr v) {
+        b_.CreateCall(rt("hmr_rt_store", void_ty_, {ptr_ty_, i32_ty_, ptr_ty_, i32_ty_}),
                       {ctx_arg_, ci32(slot), v.data, v.len});
     }
-    IrStr rtLoad(unsigned slot) {
-        return unpack(b_.CreateCall(rt("hmr_rt_load", hmrStrTy_, {ptrTy_, i32Ty_}),
+    IrStr rt_load(unsigned slot) {
+        return unpack(b_.CreateCall(rt("hmr_rt_load", hmr_str_ty_, {ptr_ty_, i32_ty_}),
                                     {ctx_arg_, ci32(slot)}));
     }
-    void rtValReset() {
-        b_.CreateCall(rt("hmr_rt_val_reset", voidTy_, {ptrTy_}), {ctx_arg_});
+    void rt_val_reset() {
+        b_.CreateCall(rt("hmr_rt_val_reset", void_ty_, {ptr_ty_}), {ctx_arg_});
     }
-    void rtValAppendLit(IrStr lit) {
-        b_.CreateCall(rt("hmr_rt_val_append_lit", voidTy_, {ptrTy_, ptrTy_, i32Ty_}),
+    void rt_val_append_lit(IrStr lit) {
+        b_.CreateCall(rt("hmr_rt_val_append_lit", void_ty_, {ptr_ty_, ptr_ty_, i32_ty_}),
                       {ctx_arg_, lit.data, lit.len});
     }
-    void rtValAppendVar(unsigned id) {
-        b_.CreateCall(rt("hmr_rt_val_append_var", voidTy_, {ptrTy_, i32Ty_}),
+    void rt_val_append_var(unsigned id) {
+        b_.CreateCall(rt("hmr_rt_val_append_var", void_ty_, {ptr_ty_, i32_ty_}),
                       {ctx_arg_, ci32(id)});
     }
-    void rtValAppendCapture(unsigned idx) {
-        b_.CreateCall(rt("hmr_rt_val_append_capture", voidTy_, {ptrTy_, i32Ty_}),
+    void rt_val_append_capture(unsigned idx) {
+        b_.CreateCall(rt("hmr_rt_val_append_capture", void_ty_, {ptr_ty_, i32_ty_}),
                       {ctx_arg_, ci32(idx)});
     }
-    void rtValAppendSlot(unsigned slot) {
-        b_.CreateCall(rt("hmr_rt_val_append_slot", voidTy_, {ptrTy_, i32Ty_}),
+    void rt_val_append_slot(unsigned slot) {
+        b_.CreateCall(rt("hmr_rt_val_append_slot", void_ty_, {ptr_ty_, i32_ty_}),
                       {ctx_arg_, ci32(slot)});
     }
-    IrStr rtValFinish() {
-        return unpack(b_.CreateCall(rt("hmr_rt_val_finish", hmrStrTy_, {ptrTy_}),
+    IrStr rt_val_finish() {
+        return unpack(b_.CreateCall(rt("hmr_rt_val_finish", hmr_str_ty_, {ptr_ty_}),
                                     {ctx_arg_}));
     }
-    IrStr rtUriGet(IrStr hv, uint32_t elem) {
+    IrStr rt_uri_get(IrStr hv, uint32_t elem) {
         return unpack(b_.CreateCall(
-            rt("hmr_rt_uri_get", hmrStrTy_, {ptrTy_, ptrTy_, i32Ty_, i32Ty_}),
+            rt("hmr_rt_uri_get", hmr_str_ty_, {ptr_ty_, ptr_ty_, i32_ty_, i32_ty_}),
             {ctx_arg_, hv.data, hv.len, ci32(elem)}));
     }
-    IrStr rtUriSet(IrStr hv, uint32_t elem, IrStr nv) {
+    IrStr rt_uri_set(IrStr hv, uint32_t elem, IrStr nv) {
         return unpack(b_.CreateCall(
-            rt("hmr_rt_uri_set", hmrStrTy_,
-               {ptrTy_, ptrTy_, i32Ty_, i32Ty_, ptrTy_, i32Ty_}),
+            rt("hmr_rt_uri_set", hmr_str_ty_,
+               {ptr_ty_, ptr_ty_, i32_ty_, i32_ty_, ptr_ty_, i32_ty_}),
             {ctx_arg_, hv.data, hv.len, ci32(elem), nv.data, nv.len}));
     }
-    void rtLog(IrStr m) {
-        b_.CreateCall(rt("hmr_rt_log", voidTy_, {ptrTy_, ptrTy_, i32Ty_}),
+    void rt_log(IrStr m) {
+        b_.CreateCall(rt("hmr_rt_log", void_ty_, {ptr_ty_, ptr_ty_, i32_ty_}),
                       {ctx_arg_, m.data, m.len});
     }
-    void rtReject(unsigned code, IrStr reason) {
-        b_.CreateCall(rt("hmr_rt_reject", voidTy_, {ptrTy_, i32Ty_, ptrTy_, i32Ty_}),
+    void rt_reject(unsigned code, IrStr reason) {
+        b_.CreateCall(rt("hmr_rt_reject", void_ty_, {ptr_ty_, i32_ty_, ptr_ty_, i32_ty_}),
                       {ctx_arg_, ci32(code), reason.data, reason.len});
     }
 
     // --- tables ------------------------------------------------------------
-    unsigned addRegex(std::string pattern, bool ci) {
+    unsigned add_regex(std::string pattern, bool ci) {
         uint32_t flags = ci ? 1u : 0u;
         for (unsigned i = 0; i < regexes_.size(); ++i)
             if (regexes_[i].first == pattern && regexes_[i].second == flags)
@@ -251,18 +268,18 @@ private:
         regexes_.emplace_back(std::move(pattern), flags);
         return static_cast<unsigned>(regexes_.size() - 1);
     }
-    unsigned slotFor(const std::string& name) {
+    unsigned slot_for(const std::string& name) {
         auto [it, ins] = slots_.try_emplace(name, static_cast<unsigned>(slots_.size()));
         return it->second;
     }
-    unsigned slotForRef(const std::string& path) {
+    unsigned slot_for_ref(const std::string& path) {
         std::string base = path.substr(0, path.find('.'));
-        return slotFor(base);
+        return slot_for(base);
     }
 
     // --- control-flow helpers ---------------------------------------------
     BasicBlock* block(const Twine& name) {
-        return BasicBlock::Create(ctx_, name, applyFn_);
+        return BasicBlock::Create(ctx_, name, apply_fn_);
     }
     // Branch to `okBB` when `condI1` holds, else to `skip`; continue at okBB.
     void guard(llvm::Value* condI1, const Twine& okName, BasicBlock* skip) {
@@ -271,186 +288,204 @@ private:
         b_.SetInsertPoint(ok);
     }
     llvm::Value* truthy(llvm::Value* i32v) { return b_.CreateICmpNE(i32v, ci32(0)); }
-    BasicBlock* rejectBlock() {
-        if (!rejectBB_) rejectBB_ = BasicBlock::Create(ctx_, "reject", applyFn_);
-        return rejectBB_;
+    BasicBlock* reject_block() {
+        if (!reject_bb_) reject_bb_ = BasicBlock::Create(ctx_, "reject", apply_fn_);
+        return reject_bb_;
     }
 
     // --- value & guard emission -------------------------------------------
-    IrStr emitValue(const Value& v);
-    void emitMatchGuard(ComparisonType cmp, const Value& mv, IrStr subject,
-                        BasicBlock* skip);
+    IrStr emit_value(const Value& v);
+    void emit_match_guard(ComparisonType cmp, MatchValType mvt, const Value& mv,
+                          IrStr subject, BasicBlock* skip);
 
     // --- rule emission (Visitor-style) ------------------------------------
-    void emitHeaderRule(const HeaderRule& hr, std::size_t idx);
-    bool emitHeaderAction(const HeaderRule& hr, std::size_t idx, IrStr hv,
-                          bool haveHv);  // returns true if it terminated the block
-    void emitElementRules(const HeaderRule& hr);
+    void emit_header_rule(const HeaderRule& hr, std::size_t idx);
+    bool emit_header_action(const HeaderRule& hr, std::size_t idx, IrStr hv,
+                            bool have_hv);  // returns true if it terminated the block
+    void emit_element_rules(const HeaderRule& hr);
 
-    void buildModuleInfo(const std::string& moduleName);
+    void build_module_info(const std::string& module_name);
 
     LLVMContext& ctx_;
     Module& mod_;
     IRBuilder<> b_;
     const IrGenOptions& opts_;
 
-    PointerType* ptrTy_;
-    Type* i32Ty_;
-    Type* voidTy_;
-    StructType* hmrStrTy_;
+    PointerType* ptr_ty_;
+    Type* i32_ty_;
+    Type* void_ty_;
+    StructType* hmr_str_ty_;
 
-    Function* applyFn_ = nullptr;
+    Function* apply_fn_ = nullptr;
     llvm::Value* msg_ = nullptr;
     llvm::Value* ctx_arg_ = nullptr;
-    BasicBlock* retOkBB_ = nullptr;
-    BasicBlock* rejectBB_ = nullptr;
+    BasicBlock* ret_ok_bb_ = nullptr;
+    BasicBlock* reject_bb_ = nullptr;
 
     std::map<std::string, GlobalVariable*> strs_;
     std::vector<std::pair<std::string, uint32_t>> regexes_;
     std::map<std::string, unsigned> slots_;
 };
 
-IrStr Emitter::emitValue(const Value& v) {
+IrStr Emitter::emit_value(const Value& v) {
     if (v.empty()) return literal("");
-    if (v.isPureLiteral()) return literal(v.literalText());
+    if (v.is_pure_literal()) return literal(v.literal_text());
 
-    if (v.isSingleRef()) {
+    if (v.is_single_ref()) {
         const auto& ref = v.segments().front().ref;
         switch (ref.kind) {
             case RefKind::Variable:
-                return rtGetVar(static_cast<unsigned>(variableId(ref.name)));
+                return rt_get_var(static_cast<unsigned>(variable_id(ref.name)));
             case RefKind::Capture:
-                return rtGetCapture(static_cast<unsigned>(std::max(0, ref.captureIndex)));
+                return rt_get_capture(static_cast<unsigned>(std::max(0, ref.capture_index)));
             case RefKind::RuleRef:
-                return rtLoad(slotForRef(ref.name));
+                return rt_load(slot_for_ref(ref.name));
         }
     }
 
     // Multi-segment expression: build into the context scratch buffer.
-    rtValReset();
+    rt_val_reset();
     for (const ValueSegment& seg : v.segments()) {
-        if (!seg.isRef) {
-            if (!seg.literal.empty()) rtValAppendLit(literal(seg.literal));
+        if (!seg.is_ref) {
+            if (!seg.literal.empty()) rt_val_append_lit(literal(seg.literal));
             continue;
         }
         switch (seg.ref.kind) {
             case RefKind::Variable:
-                rtValAppendVar(static_cast<unsigned>(variableId(seg.ref.name)));
+                rt_val_append_var(static_cast<unsigned>(variable_id(seg.ref.name)));
                 break;
             case RefKind::Capture:
-                rtValAppendCapture(static_cast<unsigned>(std::max(0, seg.ref.captureIndex)));
+                rt_val_append_capture(static_cast<unsigned>(std::max(0, seg.ref.capture_index)));
                 break;
             case RefKind::RuleRef:
-                rtValAppendSlot(slotForRef(seg.ref.name));
+                rt_val_append_slot(slot_for_ref(seg.ref.name));
                 break;
         }
     }
-    return rtValFinish();
+    return rt_val_finish();
 }
 
-void Emitter::emitMatchGuard(ComparisonType cmp, const Value& mv, IrStr subject,
-                             BasicBlock* skip) {
+void Emitter::emit_match_guard(ComparisonType cmp, MatchValType mvt,
+                               const Value& mv, IrStr subject,
+                               BasicBlock* skip) {
     if (mv.empty()) return;  // no match-value → always applies
 
-    // A $reference / interpolated match-value (boolean back-reference) is not yet
-    // evaluated as a guard; treat as always-true so the rule still fires
+    // A $reference / interpolated match-value (boolean back-reference) is not
+    // yet evaluated as a guard; treat as always-true so the rule still fires
     // (documented v1 gap).
-    if (!mv.isRegexLiteral() && !mv.isPureLiteral()) return;
+    if (!mv.is_regex_literal() && !mv.is_pure_literal()) return;
 
-    // Oracle HMR match-values are *regular expressions* for every comparison
-    // type — `case-sensitive`/`case-insensitive` merely toggle the regex case
-    // flag, while `pattern-rule` additionally exposes captures via $0/$1. We
-    // therefore lower every literal match-value to a precompiled regex evaluated
-    // with std::regex_search, which is exactly what the runtime does. Comparing
-    // literally (str_eq) was wrong: a pattern such as `internal\.local` would
-    // never match the host `internal.local` because of the escaping backslash,
-    // and an IP like `10\.0\.0\.1` would never match `10.0.0.1`.
-    const bool ci = isCaseInsensitive(cmp);
-    const std::string pattern = mv.isRegexLiteral() ? mv.literalText() : mv.raw();
-    unsigned id = addRegex(pattern, ci);
-    llvm::Value* cond = truthy(rtRegexMatch(id, subject));
+    // The literal match-value text (the leading '!' negation, if any, is already
+    // stripped by Value::parse and reflected in mv.negated()).
+    const std::string pattern =
+        mv.is_pure_literal() ? mv.literal_text() : std::string{mv.raw()};
+
+    // Select the specialized matcher (review #2): `pattern-rule` is an explicit
+    // regex; an ip/fqdn match-val-type routes to the dedicated matcher; anything
+    // else is an exact byte compare (case-folded per comparison-type). Routing
+    // every value through std::regex was the old, slow design.
+    uint32_t match_type;
+    unsigned regex_id = 0;
+    if (is_pattern(cmp)) {
+        match_type = HMR_MATCH_REGEX;
+        regex_id = add_regex(pattern, is_case_insensitive(cmp));
+    } else {
+        switch (mvt) {
+            case MatchValType::Ip:   match_type = ip_match_type(pattern); break;
+            case MatchValType::Fqdn: match_type = HMR_MATCH_FQDN; break;
+            case MatchValType::Any:
+            default:
+                match_type = is_case_insensitive(cmp) ? HMR_MATCH_EXACT_CI
+                                                      : HMR_MATCH_EXACT;
+                break;
+        }
+    }
+
+    IrStr pat = literal(pattern);
+    llvm::Value* cond = truthy(rt_match(match_type, subject, pat, regex_id));
     if (mv.negated()) cond = b_.CreateNot(cond);
     guard(cond, "match.ok", skip);
 }
 
-bool Emitter::emitHeaderAction(const HeaderRule& hr, std::size_t idx, IrStr hv,
-                               bool haveHv) {
-    const IrStr name = literal(hr.headerName);
+bool Emitter::emit_header_action(const HeaderRule& hr, std::size_t idx, IrStr hv,
+                                 bool have_hv) {
+    const IrStr name = literal(hr.header_name);
     switch (hr.action) {
         case HeaderAction::Add:
-            rtAddHeader(name, emitValue(hr.newValue));
+            rt_add_header(name, emit_value(hr.new_value));
             return false;
         case HeaderAction::Replace:
         case HeaderAction::Manipulate /*header-level replace via new-value*/:
-            if (!hr.newValue.empty() && hr.elementRules.empty()) {
-                rtSetHeader(name, emitValue(hr.newValue));
+            if (!hr.new_value.empty() && hr.element_rules.empty()) {
+                rt_set_header(name, emit_value(hr.new_value));
                 return false;
             }
             return false;  // pure manipulate → handled by element rules
         case HeaderAction::Delete:
         case HeaderAction::DeleteHeader:
-            rtDeleteHeader(name);
+            rt_delete_header(name);
             return false;
         case HeaderAction::Store: {
-            unsigned slot = slotFor(hr.name.empty() ? ("rule" + std::to_string(idx)) : hr.name);
-            if (isPattern(hr.comparison))
-                rtStore(slot, rtGetCapture(0));
+            unsigned slot = slot_for(hr.name.empty() ? ("rule" + std::to_string(idx)) : hr.name);
+            if (is_pattern(hr.comparison))
+                rt_store(slot, rt_get_capture(0));
             else
-                rtStore(slot, haveHv ? hv : rtGetHeader(name));
+                rt_store(slot, have_hv ? hv : rt_get_header(name));
             return false;
         }
         case HeaderAction::Log:
-            rtLog(hr.newValue.empty() ? literal(hr.name) : emitValue(hr.newValue));
+            rt_log(hr.new_value.empty() ? literal(hr.name) : emit_value(hr.new_value));
             return false;
         case HeaderAction::Reject:
-            rtReject(403u, hr.newValue.empty() ? literal(hr.name)
-                                               : emitValue(hr.newValue));
-            b_.CreateBr(rejectBlock());
+            rt_reject(403u, hr.new_value.empty() ? literal(hr.name)
+                                                 : emit_value(hr.new_value));
+            b_.CreateBr(reject_block());
             return true;
         default:
             return false;  // None / DeleteElement / etc. — no header-level act
     }
 }
 
-void Emitter::emitElementRules(const HeaderRule& hr) {
-    const IrStr name = literal(hr.headerName);
-    for (const ElementRule& er : hr.elementRules) {
-        std::optional<uint32_t> elem = uriElement(er.type);
+void Emitter::emit_element_rules(const HeaderRule& hr) {
+    const IrStr name = literal(hr.header_name);
+    for (const ElementRule& er : hr.element_rules) {
+        std::optional<uint32_t> elem = uri_element(er.type);
         if (!elem) continue;  // unsupported element kind: skip (no-op)
 
         BasicBlock* cont = block("el.cont");
         // Re-read the header each time: a previous element rule may have
         // mutated it, so its old view would be stale.
-        IrStr hv = rtGetHeader(name);
-        IrStr ev = (*elem == HMR_URI_WHOLE) ? hv : rtUriGet(hv, *elem);
+        IrStr hv = rt_get_header(name);
+        IrStr ev = (*elem == HMR_URI_WHOLE) ? hv : rt_uri_get(hv, *elem);
 
-        emitMatchGuard(er.comparison, er.matchValue, ev, cont);
+        emit_match_guard(er.comparison, er.match_val_type, er.match_value, ev,
+                         cont);
 
         bool terminated = false;
         switch (er.action) {
             case ElementAction::Replace: {
-                IrStr nv = emitValue(er.newValue);
+                IrStr nv = emit_value(er.new_value);
                 if (*elem == HMR_URI_WHOLE)
-                    rtSetHeader(name, nv);
+                    rt_set_header(name, nv);
                 else
-                    rtSetHeader(name, rtUriSet(hv, *elem, nv));
+                    rt_set_header(name, rt_uri_set(hv, *elem, nv));
                 break;
             }
             case ElementAction::DeleteElement:
                 if (*elem == HMR_URI_WHOLE)
-                    rtDeleteHeader(name);
+                    rt_delete_header(name);
                 else
-                    rtSetHeader(name, rtUriSet(hv, *elem, literal("")));
+                    rt_set_header(name, rt_uri_set(hv, *elem, literal("")));
                 break;
             case ElementAction::Store: {
-                unsigned slot = slotFor(er.name.empty() ? (hr.name + ".el") : er.name);
-                rtStore(slot, ev);
+                unsigned slot = slot_for(er.name.empty() ? (hr.name + ".el") : er.name);
+                rt_store(slot, ev);
                 break;
             }
             case ElementAction::Reject:
-                rtReject(403u, er.newValue.empty() ? literal(er.name)
-                                                   : emitValue(er.newValue));
-                b_.CreateBr(rejectBlock());
+                rt_reject(403u, er.new_value.empty() ? literal(er.name)
+                                                     : emit_value(er.new_value));
+                b_.CreateBr(reject_block());
                 terminated = true;
                 break;
             default:
@@ -461,50 +496,51 @@ void Emitter::emitElementRules(const HeaderRule& hr) {
     }
 }
 
-void Emitter::emitHeaderRule(const HeaderRule& hr, std::size_t idx) {
+void Emitter::emit_header_rule(const HeaderRule& hr, std::size_t idx) {
     BasicBlock* cont = block("rule.cont");
 
     // Guard: message type.
-    if (hr.msgType == MsgType::Request)
-        guard(truthy(rtIsRequest()), "is.req", cont);
-    else if (hr.msgType == MsgType::Reply)
-        guard(b_.CreateNot(truthy(rtIsRequest())), "is.reply", cont);
+    if (hr.msg_type == MsgType::Request)
+        guard(truthy(rt_is_request()), "is.req", cont);
+    else if (hr.msg_type == MsgType::Reply)
+        guard(b_.CreateNot(truthy(rt_is_request())), "is.reply", cont);
 
     // Guard: method whitelist (case-insensitive OR across the listed methods).
-    if (hr.hasMethodFilter()) {
-        IrStr method = rtGetMethod();
+    if (hr.has_method_filter()) {
+        IrStr method = rt_get_method();
         llvm::Value* acc = ConstantInt::getFalse(ctx_);
         for (const std::string& m : hr.methods)
-            acc = b_.CreateOr(acc, truthy(rtStrEq(method, literal(m), /*ci=*/true)));
+            acc = b_.CreateOr(acc, truthy(rt_str_eq(method, literal(m), /*ci=*/true)));
         guard(acc, "method.ok", cont);
     }
 
     // Fetch the header value if the match-guard or action needs it.
-    const bool needHv = !hr.matchValue.empty() || hr.action == HeaderAction::Store;
+    const bool need_hv = !hr.match_value.empty() || hr.action == HeaderAction::Store;
     IrStr hv{nullptr, nullptr};
-    bool haveHv = false;
-    if (needHv) {
-        hv = rtGetHeader(literal(hr.headerName));
-        haveHv = true;
+    bool have_hv = false;
+    if (need_hv) {
+        hv = rt_get_header(literal(hr.header_name));
+        have_hv = true;
     }
 
-    // Guard: header-level match-value.
-    if (!hr.matchValue.empty())
-        emitMatchGuard(hr.comparison, hr.matchValue, hv, cont);
+    // Guard: header-level match-value (no per-element match-val-type → Any).
+    if (!hr.match_value.empty())
+        emit_match_guard(hr.comparison, MatchValType::Any, hr.match_value, hv,
+                         cont);
 
-    bool terminated = emitHeaderAction(hr, idx, hv, haveHv);
+    bool terminated = emit_header_action(hr, idx, hv, have_hv);
 
     // Element rules drive `manipulate` (and run after any other header action).
-    if (!terminated && !hr.elementRules.empty()) emitElementRules(hr);
+    if (!terminated && !hr.element_rules.empty()) emit_element_rules(hr);
 
     if (!terminated) b_.CreateBr(cont);
     b_.SetInsertPoint(cont);
 }
 
-void Emitter::buildModuleInfo(const std::string& moduleName) {
+void Emitter::build_module_info(const std::string& module_name) {
     // Regex table: [N x %HmrRegexEntry], referenced by hmr_module_info.
-    StructType* regexEntryTy = StructType::create(ctx_, {ptrTy_, i32Ty_}, "HmrRegexEntry");
-    llvm::Constant* regexesPtr = ConstantPointerNull::get(ptrTy_);
+    StructType* regexEntryTy = StructType::create(ctx_, {ptr_ty_, i32_ty_}, "HmrRegexEntry");
+    llvm::Constant* regexesPtr = ConstantPointerNull::get(ptr_ty_);
     if (!regexes_.empty()) {
         std::vector<llvm::Constant*> entries;
         entries.reserve(regexes_.size());
@@ -523,8 +559,8 @@ void Emitter::buildModuleInfo(const std::string& moduleName) {
     }
 
     StructType* modInfoTy = StructType::create(
-        ctx_, {i32Ty_, ptrTy_, i32Ty_, i32Ty_, ptrTy_}, "HmrModuleInfo");
-    IrStr nameStr = literal(moduleName);
+        ctx_, {i32_ty_, ptr_ty_, i32_ty_, i32_ty_, ptr_ty_}, "HmrModuleInfo");
+    IrStr nameStr = literal(module_name);
     llvm::Constant* init = ConstantStruct::get(
         modInfoTy,
         {ci32(HMR_ABI_VERSION), cast<llvm::Constant>(nameStr.data),
@@ -541,32 +577,32 @@ Result<void> Emitter::emit(const Ruleset& rs, const opt::DecisionPlan& plan,
                            IrModuleStats* stats) {
     (void)plan;  // emission preserves original order; plan is reported as stats
 
-    FunctionType* applyTy = FunctionType::get(i32Ty_, {ptrTy_, ptrTy_}, false);
-    applyFn_ = Function::Create(applyTy, GlobalValue::ExternalLinkage, "hmr_apply", mod_);
-    applyFn_->getArg(0)->setName("msg");
-    applyFn_->getArg(1)->setName("ctx");
-    msg_ = applyFn_->getArg(0);
-    ctx_arg_ = applyFn_->getArg(1);
+    FunctionType* applyTy = FunctionType::get(i32_ty_, {ptr_ty_, ptr_ty_}, false);
+    apply_fn_ = Function::Create(applyTy, GlobalValue::ExternalLinkage, "hmr_apply", mod_);
+    apply_fn_->getArg(0)->setName("msg");
+    apply_fn_->getArg(1)->setName("ctx");
+    msg_ = apply_fn_->getArg(0);
+    ctx_arg_ = apply_fn_->getArg(1);
 
-    BasicBlock* entry = BasicBlock::Create(ctx_, "entry", applyFn_);
-    retOkBB_ = BasicBlock::Create(ctx_, "ret.ok", applyFn_);
+    BasicBlock* entry = BasicBlock::Create(ctx_, "entry", apply_fn_);
+    ret_ok_bb_ = BasicBlock::Create(ctx_, "ret.ok", apply_fn_);
     b_.SetInsertPoint(entry);
 
-    for (std::size_t i = 0; i < rs.headerRules.size(); ++i)
-        emitHeaderRule(rs.headerRules[i], i);
+    for (std::size_t i = 0; i < rs.header_rules.size(); ++i)
+        emit_header_rule(rs.header_rules[i], i);
 
-    b_.CreateBr(retOkBB_);
+    b_.CreateBr(ret_ok_bb_);
 
-    b_.SetInsertPoint(retOkBB_);
+    b_.SetInsertPoint(ret_ok_bb_);
     b_.CreateRet(ci32(HMR_OK));
 
-    if (rejectBB_) {
-        b_.SetInsertPoint(rejectBB_);
+    if (reject_bb_) {
+        b_.SetInsertPoint(reject_bb_);
         b_.CreateRet(ci32(HMR_REJECTED));
     }
 
-    const std::string moduleName = rs.name.empty() ? "hmr" : rs.name;
-    buildModuleInfo(moduleName);
+    const std::string module_name = rs.name.empty() ? "hmr" : rs.name;
+    build_module_info(module_name);
 
     std::string err;
     raw_string_ostream os(err);
@@ -576,25 +612,25 @@ Result<void> Emitter::emit(const Ruleset& rs, const opt::DecisionPlan& plan,
     }
 
     if (stats) {
-        stats->moduleName = moduleName;
-        stats->numSlots = static_cast<unsigned>(slots_.size());
-        stats->numRegexes = static_cast<unsigned>(regexes_.size());
-        stats->numHeaderRules = static_cast<unsigned>(rs.headerRules.size());
+        stats->module_name = module_name;
+        stats->num_slots = static_cast<unsigned>(slots_.size());
+        stats->num_regexes = static_cast<unsigned>(regexes_.size());
+        stats->num_header_rules = static_cast<unsigned>(rs.header_rules.size());
     }
     return {};
 }
 
 }  // namespace
 
-Result<std::string> IrGenerator::generateIR(const ast::Ruleset& rs,
-                                            const opt::DecisionPlan& plan,
-                                            const IrGenOptions& opts,
-                                            IrModuleStats* stats) {
+Result<std::string> IrGenerator::generate_ir(const ast::Ruleset& rs,
+                                             const opt::DecisionPlan& plan,
+                                             const IrGenOptions& opts,
+                                             IrModuleStats* stats) {
     LLVMContext context;
-    Module mod(opts.moduleId, context);
-    mod.setTargetTriple(opts.targetTriple.empty()
+    Module mod(opts.module_id, context);
+    mod.setTargetTriple(opts.target_triple.empty()
                             ? llvm::sys::getDefaultTargetTriple()
-                            : opts.targetTriple);
+                            : opts.target_triple);
 
     Emitter emitter(context, mod, opts);
     if (auto r = emitter.emit(rs, plan, stats); !r)

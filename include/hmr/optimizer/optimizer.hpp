@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Optimizer.hpp — the rule-level optimizer and its CRTP pass set.
+// optimizer.hpp — the rule-level optimizer and its CRTP pass set.
 //
 // The optimizer runs a chain of transform passes to a fixpoint, then a final
 // analysis pass that derives the decision plan consumed by the code generator.
@@ -20,8 +20,8 @@
 #include <string>
 #include <vector>
 
-#include "hmr/ast/Ast.hpp"
-#include "hmr/optimizer/Pass.hpp"
+#include "hmr/ast/ast.hpp"
+#include "hmr/optimizer/pass.hpp"
 
 namespace hmr::opt {
 
@@ -53,8 +53,8 @@ public:
 
 // --- Analysis pass: decision plan ------------------------------------------
 struct DecisionGroup {
-    std::string headerName;            // target header (lower-cased)
-    std::vector<std::size_t> ruleIdx;  // indices into Ruleset::headerRules
+    std::string header_name;             // target header (lower-cased)
+    std::vector<std::size_t> rule_idx;   // indices into Ruleset::header_rules
 };
 
 struct DecisionPlan {
@@ -79,7 +79,7 @@ struct OptimizationReport {
     DecisionPlan plan;
     unsigned iterations = 0;
 
-    [[nodiscard]] std::size_t totalChanges() const {
+    [[nodiscard]] std::size_t total_changes() const {
         std::size_t n = 0;
         for (const auto& p : passes) n += p.changes;
         return n;
@@ -88,15 +88,15 @@ struct OptimizationReport {
 
 class Optimizer {
 public:
-    explicit Optimizer(unsigned maxIterations = 4)
-        : maxIterations_(maxIterations) {}
+    explicit Optimizer(unsigned max_iterations = 4)
+        : max_iterations_(max_iterations) {}
 
-    // Run the transform passes to a fixpoint (or maxIterations), then the
+    // Run the transform passes to a fixpoint (or max_iterations), then the
     // decision-tree analysis. Mutates `rs` in place.
     OptimizationReport optimize(ast::Ruleset& rs);
 
 private:
-    unsigned maxIterations_;
+    unsigned max_iterations_;
 };
 
 }  // namespace hmr::opt

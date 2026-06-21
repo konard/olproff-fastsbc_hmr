@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// ModuleManager.cpp — dlopen/dlsym loading with RCU-style hot replacement.
+// module_manager.cpp — dlopen/dlsym loading with RCU-style hot replacement.
 
-#include "hmr/module/ModuleManager.hpp"
+#include "hmr/module/module_manager.hpp"
 
 #include <dlfcn.h>
 
@@ -12,10 +12,10 @@
 
 namespace hmr::module {
 
-LoadedModule::LoadedModule(void* handle, hmr_apply_fn applyFn,
+LoadedModule::LoadedModule(void* handle, hmr_apply_fn apply_fn,
                            const HmrModuleInfo* info, std::string path)
     : handle_(handle),
-      applyFn_(applyFn),
+      apply_fn_(apply_fn),
       info_(info),
       path_(std::move(path)) {}
 
@@ -29,7 +29,7 @@ namespace {
 // memcpy sidesteps the ISO-C++ object↔function pointer cast diagnostic while
 // relying only on POSIX's guarantee that dlsym yields a usable address.
 template <class T>
-T symbolAs(void* handle, const char* name) {
+T symbol_as(void* handle, const char* name) {
     void* sym = ::dlsym(handle, name);
     if (!sym) return nullptr;
     T out{};
@@ -57,10 +57,10 @@ Result<std::shared_ptr<const LoadedModule>> ModuleManager::load(
         return make_error(std::move(msg));
     };
 
-    auto applyFn = symbolAs<hmr_apply_fn>(handle, "hmr_apply");
-    if (!applyFn) return fail("module: '" + path + "' is missing 'hmr_apply'");
+    auto apply_fn = symbol_as<hmr_apply_fn>(handle, "hmr_apply");
+    if (!apply_fn) return fail("module: '" + path + "' is missing 'hmr_apply'");
 
-    auto info = symbolAs<const HmrModuleInfo*>(handle, "hmr_module_info");
+    auto info = symbol_as<const HmrModuleInfo*>(handle, "hmr_module_info");
     if (!info) return fail("module: '" + path + "' is missing 'hmr_module_info'");
 
     if (info->abi_version != HMR_ABI_VERSION)
@@ -68,27 +68,27 @@ Result<std::shared_ptr<const LoadedModule>> ModuleManager::load(
                     std::to_string(info->abi_version) + ", host v" +
                     std::to_string(HMR_ABI_VERSION) + ")");
 
-    const bool isReload = current_.load(std::memory_order_acquire) != nullptr;
+    const bool is_reload = current_.load(std::memory_order_acquire) != nullptr;
 
-    auto module = std::make_shared<LoadedModule>(handle, applyFn, info, path);
+    auto module = std::make_shared<LoadedModule>(handle, apply_fn, info, path);
     // Publish: release-store so a reader's acquire-load sees a fully built node.
     current_.store(module, std::memory_order_release);
 
-    notify({isReload ? ModuleEventKind::Reloaded : ModuleEventKind::Loaded, path,
+    notify({is_reload ? ModuleEventKind::Reloaded : ModuleEventKind::Loaded, path,
             module->name(), {}});
     return std::shared_ptr<const LoadedModule>(std::move(module));
 }
 
 void ModuleManager::subscribe(ModuleObserver* observer) {
     if (!observer) return;
-    std::lock_guard lock(observerMtx_);
+    std::lock_guard lock(observer_mtx_);
     for (auto* o : observers_)
         if (o == observer) return;  // idempotent
     observers_.push_back(observer);
 }
 
 void ModuleManager::unsubscribe(ModuleObserver* observer) {
-    std::lock_guard lock(observerMtx_);
+    std::lock_guard lock(observer_mtx_);
     for (auto it = observers_.begin(); it != observers_.end(); ++it) {
         if (*it == observer) {
             observers_.erase(it);
@@ -100,10 +100,10 @@ void ModuleManager::unsubscribe(ModuleObserver* observer) {
 void ModuleManager::notify(const ModuleEvent& event) {
     std::vector<ModuleObserver*> snapshot;
     {
-        std::lock_guard lock(observerMtx_);
+        std::lock_guard lock(observer_mtx_);
         snapshot = observers_;
     }
-    for (auto* o : snapshot) o->onModuleEvent(event);
+    for (auto* o : snapshot) o->on_module_event(event);
 }
 
 }  // namespace hmr::module

@@ -28,6 +28,7 @@ sip-manipulation MultipleHeaders
                         name    setUserAgent
                         type    header-value
                         action  replace
+                        comparison-type  pattern-rule
                         match-value  .*
                         new-value    SBC/1.0
 

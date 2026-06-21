@@ -11,12 +11,14 @@ sip-manipulation NestedElements
                         name    setHost
                         type    uri-host
                         action  replace
+                        comparison-type  pattern-rule
                         match-value  .*
                         new-value    $LOCAL_IP
                 element-rule
                         name    setPort
                         type    uri-port
                         action  replace
+                        comparison-type  pattern-rule
                         match-value  .*
                         new-value    $LOCAL_PORT
                 element-rule
@@ -29,5 +31,6 @@ sip-manipulation NestedElements
                         name    setDisplay
                         type    uri-display
                         action  replace
+                        comparison-type  pattern-rule
                         match-value  .*
                         new-value    Carrier

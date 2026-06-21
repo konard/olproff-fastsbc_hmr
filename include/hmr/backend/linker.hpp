@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Linker.hpp — links a relocatable object into a loadable shared module.
+// linker.hpp — links a relocatable object into a loadable shared module.
 //
 // A generated HMR module references the host's `hmr_rt_*` runtime entry points
 // as *undefined* symbols: the host process (the SBC) provides the runtime, and
@@ -20,25 +20,25 @@
 #include <string>
 #include <vector>
 
-#include "hmr/backend/Backend.hpp"
-#include "hmr/diagnostics/Diagnostics.hpp"
+#include "hmr/backend/backend.hpp"
+#include "hmr/diagnostics/diagnostics.hpp"
 
 namespace hmr::backend {
 
 struct LinkOptions {
-    std::string outputPath = "a.so";   // destination shared object
-    std::string driver;                // empty → $HMR_CC, else "cc"
-    std::vector<std::string> extraArgs;  // appended verbatim to the link line
-    bool stripDebug = true;            // pass -Wl,--strip-debug
+    std::string output_path = "a.so";    // destination shared object
+    std::string driver;                  // empty → $HMR_CC, else "cc"
+    std::vector<std::string> extra_args;  // appended verbatim to the link line
+    bool strip_debug = true;             // pass -Wl,--strip-debug
 };
 
 class Linker {
 public:
     // Write `obj` to a temporary file and link it into a shared object at
-    // opts.outputPath. Returns an error (including captured linker output) on
+    // opts.output_path. Returns an error (including captured linker output) on
     // any toolchain failure.
-    [[nodiscard]] Result<void> linkSharedObject(const ObjectCode& obj,
-                                                const LinkOptions& opts);
+    [[nodiscard]] Result<void> link_shared_object(const ObjectCode& obj,
+                                                  const LinkOptions& opts);
 };
 
 }  // namespace hmr::backend

@@ -3,7 +3,7 @@
 // hmrc — the HMR compiler driver / CLI (Facade entry point).
 //
 // Subcommands:
-//   parse        <file>                  lex + parse, report diagnostics
+//   parse        <file>                  parse, report diagnostics
 //   dump-ast     <file>                  parse and pretty-print the AST
 //   optimize     <file>                  parse + run the optimizer, show report
 //   check-samples <dir>                  parse every *.hmr (invalid_* must fail)
@@ -23,14 +23,13 @@
 #include <string>
 #include <vector>
 
-#include "hmr/ast/AstVisitor.hpp"
-#include "hmr/optimizer/Optimizer.hpp"
-#include "hmr/parser/Lexer.hpp"
-#include "hmr/parser/Parser.hpp"
+#include "hmr/ast/ast_visitor.hpp"
+#include "hmr/optimizer/optimizer.hpp"
+#include "hmr/parser/parser.hpp"
 
 #if HMR_HAVE_LLVM
-#include "hmr/backend/Backend.hpp"
-#include "hmr/pipeline/Compiler.hpp"
+#include "hmr/backend/backend.hpp"
+#include "hmr/pipeline/compiler.hpp"
 #endif
 
 namespace {
@@ -52,7 +51,7 @@ int usage() {
     return 2;
 }
 
-std::optional<std::string> readFile(const std::string& path) {
+std::optional<std::string> read_file(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return std::nullopt;
     std::ostringstream ss;
@@ -60,23 +59,16 @@ std::optional<std::string> readFile(const std::string& path) {
     return ss.str();
 }
 
-// Lex + parse a file, printing diagnostics (and warnings). Returns the ruleset,
-// or nullopt on a lex/parse error.
-std::optional<hmr::ast::Ruleset> parseFile(const std::string& path,
-                                           bool quiet = false) {
-    auto src = readFile(path);
+// Parse a file, printing diagnostics (and warnings). Returns the ruleset, or
+// nullopt on a parse error.
+std::optional<hmr::ast::Ruleset> parse_file(const std::string& path,
+                                            bool quiet = false) {
+    auto src = read_file(path);
     if (!src) {
         std::fprintf(stderr, "error: cannot read '%s'\n", path.c_str());
         return std::nullopt;
     }
-    auto toks = hmr::parser::Lexer(*src).tokenize();
-    if (!toks) {
-        if (!quiet)
-            std::fprintf(stderr, "%s: %s\n", path.c_str(),
-                         toks.error().format().c_str());
-        return std::nullopt;
-    }
-    hmr::parser::Parser parser(std::move(*toks));
+    hmr::parser::Parser parser(*src);
     auto rs = parser.parse();
     if (!rs) {
         if (!quiet)
@@ -90,23 +82,23 @@ std::optional<hmr::ast::Ruleset> parseFile(const std::string& path,
     return std::move(*rs);
 }
 
-int cmdParse(const std::string& path) {
-    auto rs = parseFile(path);
+int cmd_parse(const std::string& path) {
+    auto rs = parse_file(path);
     if (!rs) return 1;
     std::printf("%s: ok — %zu header-rule(s)\n", path.c_str(),
-                rs->headerRules.size());
+                rs->header_rules.size());
     return 0;
 }
 
-int cmdDumpAst(const std::string& path) {
-    auto rs = parseFile(path);
+int cmd_dump_ast(const std::string& path) {
+    auto rs = parse_file(path);
     if (!rs) return 1;
-    std::fputs(hmr::ast::toHmrText(*rs).c_str(), stdout);
+    std::fputs(hmr::ast::to_hmr_text(*rs).c_str(), stdout);
     return 0;
 }
 
-int cmdOptimize(const std::string& path) {
-    auto rs = parseFile(path);
+int cmd_optimize(const std::string& path) {
+    auto rs = parse_file(path);
     if (!rs) return 1;
     hmr::opt::Optimizer opt;
     auto report = opt.optimize(*rs);
@@ -116,13 +108,13 @@ int cmdOptimize(const std::string& path) {
                     static_cast<int>(p.name.size()), p.name.data(), p.changes);
     std::printf("  decision groups: %zu\n", report.plan.size());
     std::puts("--- optimized AST ---");
-    std::fputs(hmr::ast::toHmrText(*rs).c_str(), stdout);
+    std::fputs(hmr::ast::to_hmr_text(*rs).c_str(), stdout);
     return 0;
 }
 
 // ctest helper: every *.hmr in <dir> must parse, except files named invalid_*
 // which must fail. Exit nonzero if any expectation is violated.
-int cmdCheckSamples(const std::string& dir) {
+int cmd_check_samples(const std::string& dir) {
     if (!fs::is_directory(dir)) {
         std::fprintf(stderr, "error: '%s' is not a directory\n", dir.c_str());
         return 2;
@@ -135,16 +127,16 @@ int cmdCheckSamples(const std::string& dir) {
 
     int failures = 0;
     for (const auto& p : paths) {
-        bool expectFail = p.filename().string().rfind("invalid_", 0) == 0;
-        bool ok = parseFile(p.string(), /*quiet=*/true).has_value();
-        if (ok == expectFail) {
+        bool expect_fail = p.filename().string().rfind("invalid_", 0) == 0;
+        bool ok = parse_file(p.string(), /*quiet=*/true).has_value();
+        if (ok == expect_fail) {
             std::printf("  FAIL %s (expected %s, got %s)\n",
-                        p.filename().c_str(), expectFail ? "parse-error" : "success",
+                        p.filename().c_str(), expect_fail ? "parse-error" : "success",
                         ok ? "success" : "parse-error");
             ++failures;
         } else {
             std::printf("  ok   %s (%s)\n", p.filename().c_str(),
-                        expectFail ? "rejected" : "parsed");
+                        expect_fail ? "rejected" : "parsed");
         }
     }
     std::printf("%zu sample(s) checked, %d failure(s)\n", paths.size(), failures);
@@ -156,14 +148,14 @@ int cmdCheckSamples(const std::string& dir) {
 // from the generator (before optimization); with --opt the same IR is run
 // through the backend's HMR + -O3 pipeline (after optimization). The pair is the
 // "LLVM IR examples (before/after optimization)" documentation artifact.
-int cmdDumpIr(const std::string& path, bool optimize) {
-    auto src = readFile(path);
+int cmd_dump_ir(const std::string& path, bool optimize) {
+    auto src = read_file(path);
     if (!src) {
         std::fprintf(stderr, "error: cannot read '%s'\n", path.c_str());
         return 1;
     }
     hmr::pipeline::Compiler compiler;
-    auto ir = compiler.compileToIR(*src);
+    auto ir = compiler.compile_to_ir(*src);
     if (!ir) {
         std::fprintf(stderr, "%s: %s\n", path.c_str(),
                      ir.error().format().c_str());
@@ -174,7 +166,7 @@ int cmdDumpIr(const std::string& path, bool optimize) {
         return 0;
     }
     hmr::backend::Backend backend;
-    auto opt = backend.optimizeIR(*ir);
+    auto opt = backend.optimize_ir(*ir);
     if (!opt) {
         std::fprintf(stderr, "%s: %s\n", path.c_str(),
                      opt.error().format().c_str());
@@ -184,22 +176,22 @@ int cmdDumpIr(const std::string& path, bool optimize) {
     return 0;
 }
 
-int cmdCompile(const std::string& path, const std::string& out) {
-    auto src = readFile(path);
+int cmd_compile(const std::string& path, const std::string& out) {
+    auto src = read_file(path);
     if (!src) {
         std::fprintf(stderr, "error: cannot read '%s'\n", path.c_str());
         return 1;
     }
     hmr::pipeline::Compiler compiler;
     hmr::pipeline::CompileOptions opts;
-    opts.outputPath = out;
-    auto result = compiler.compileToFile(*src, opts);
+    opts.output_path = out;
+    auto result = compiler.compile_to_file(*src, opts);
     if (!result) {
         std::fprintf(stderr, "%s: %s\n", path.c_str(),
                      result.error().format().c_str());
         return 1;
     }
-    std::printf("wrote %s (%zu bytes)\n", out.c_str(), result->byteSize);
+    std::printf("wrote %s (%zu bytes)\n", out.c_str(), result->byte_size);
     return 0;
 }
 #endif
@@ -211,23 +203,23 @@ int main(int argc, char** argv) {
     if (args.empty()) return usage();
     const std::string& cmd = args[0];
 
-    if (cmd == "parse" && args.size() == 2) return cmdParse(args[1]);
-    if (cmd == "dump-ast" && args.size() == 2) return cmdDumpAst(args[1]);
-    if (cmd == "optimize" && args.size() == 2) return cmdOptimize(args[1]);
-    if (cmd == "check-samples" && args.size() == 2) return cmdCheckSamples(args[1]);
+    if (cmd == "parse" && args.size() == 2) return cmd_parse(args[1]);
+    if (cmd == "dump-ast" && args.size() == 2) return cmd_dump_ast(args[1]);
+    if (cmd == "optimize" && args.size() == 2) return cmd_optimize(args[1]);
+    if (cmd == "check-samples" && args.size() == 2) return cmd_check_samples(args[1]);
 
 #if HMR_HAVE_LLVM
     if (cmd == "dump-ir" && args.size() >= 2) {
         bool optimize = false;
         for (std::size_t i = 2; i < args.size(); ++i)
             if (args[i] == "--opt" || args[i] == "-O") optimize = true;
-        return cmdDumpIr(args[1], optimize);
+        return cmd_dump_ir(args[1], optimize);
     }
     if (cmd == "compile" && args.size() >= 2) {
         std::string out = "a.so";
         for (std::size_t i = 2; i + 1 < args.size(); ++i)
             if (args[i] == "-o") out = args[i + 1];
-        return cmdCompile(args[1], out);
+        return cmd_compile(args[1], out);
     }
 #endif
 

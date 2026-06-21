@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Pass.hpp — CRTP base for optimizer passes (zero-cost static polymorphism).
+// pass.hpp — CRTP base for optimizer passes (zero-cost static polymorphism).
 //
 // Each optimization pass derives from PassBase<Derived> and provides:
 //   * `static constexpr std::string_view kName;`
@@ -16,7 +16,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "hmr/ast/Ast.hpp"
+#include "hmr/ast/ast.hpp"
 
 namespace hmr::opt {
 

@@ -132,6 +132,98 @@ hmr_runtime_dep = declare_dependency(
   link_with: libhmr_runtime)
 
 # ---------------------------------------------------------------------------
+# hmr_optimizer — rule-level AST optimizer (pure AST transforms, no LLVM).
+# Built unconditionally so `hmrc parse/optimize` work in a no-LLVM build.
+# ---------------------------------------------------------------------------
+libhmr_optimizer = static_library('hmr_optimizer',
+  'src/optimizer/optimizer.cpp',
+  include_directories: hmr_inc,
+  dependencies: hmr_frontend_dep,
+  cpp_args: hmr_warn_args)
+
+hmr_optimizer_dep = declare_dependency(
+  include_directories: hmr_inc,
+  link_with: libhmr_optimizer,
+  dependencies: hmr_frontend_dep)
+
+# ---------------------------------------------------------------------------
+# LLVM-backed layers — codegen (AST → IR), backend (IR → object), module
+# loader (dlopen + RCU hot-swap) and the pipeline Facade. The front-end CLI
+# subcommands work without LLVM; `dump-ir`/`compile` need it, so they are gated
+# behind -Denable_llvm (which also defines HMR_HAVE_LLVM for the sources).
+# ---------------------------------------------------------------------------
+hmrc_deps = [hmr_frontend_dep, hmr_optimizer_dep]
+hmrc_args = hmr_warn_args
+enable_llvm = get_option('enable_llvm')
+
+if enable_llvm
+  # llvm-config resolves transitive component deps, so the high-level modules
+  # below pull in everything codegen/backend need (analysis, transforms, the
+  # native target's codegen, …). include_type:'system' keeps LLVM's own
+  # headers out of our -Wconversion/-Wshadow diagnostics.
+  llvm_dep = dependency('llvm',
+    version: '>=15.0',
+    modules: ['core', 'irreader', 'asmparser', 'passes', 'native',
+              'codegen', 'target', 'mc', 'support', 'targetparser'],
+    include_type: 'system')
+
+  libhmr_codegen = static_library('hmr_codegen',
+    'src/codegen/ir_generator.cpp',
+    include_directories: hmr_inc,
+    dependencies: [hmr_frontend_dep, hmr_optimizer_dep, llvm_dep],
+    cpp_args: hmr_warn_args)
+  hmr_codegen_dep = declare_dependency(
+    include_directories: hmr_inc,
+    link_with: libhmr_codegen,
+    dependencies: [hmr_frontend_dep, hmr_optimizer_dep, llvm_dep])
+
+  libhmr_backend = static_library('hmr_backend',
+    ['src/backend/backend.cpp', 'src/backend/linker.cpp'],
+    include_directories: hmr_inc,
+    dependencies: llvm_dep,
+    cpp_args: hmr_warn_args)
+  hmr_backend_dep = declare_dependency(
+    include_directories: hmr_inc,
+    link_with: libhmr_backend,
+    dependencies: llvm_dep)
+
+  # The module loader uses dlopen/dlsym; no LLVM dependency of its own, but it
+  # is only useful alongside compiled modules, so it lives in this block.
+  dl_dep = cpp.find_library('dl', required: false)
+  libhmr_module = static_library('hmr_module',
+    'src/module/module_manager.cpp',
+    include_directories: hmr_inc,
+    dependencies: dl_dep,
+    cpp_args: hmr_warn_args)
+  hmr_module_dep = declare_dependency(
+    include_directories: hmr_inc,
+    link_with: libhmr_module,
+    dependencies: dl_dep)
+
+  libhmr_pipeline = static_library('hmr_pipeline',
+    'src/pipeline/compiler.cpp',
+    include_directories: hmr_inc,
+    dependencies: [hmr_frontend_dep, hmr_optimizer_dep, hmr_codegen_dep,
+                   hmr_backend_dep, llvm_dep],
+    cpp_args: hmr_warn_args)
+  hmr_pipeline_dep = declare_dependency(
+    include_directories: hmr_inc,
+    link_with: libhmr_pipeline,
+    dependencies: [hmr_frontend_dep, hmr_optimizer_dep, hmr_codegen_dep,
+                   hmr_backend_dep, llvm_dep])
+
+  hmrc_deps += [hmr_codegen_dep, hmr_backend_dep, hmr_pipeline_dep]
+  hmrc_args += '-DHMR_HAVE_LLVM=1'
+endif
+
+# ---------------------------------------------------------------------------
+# hmrc — the compiler driver / CLI.
+# ---------------------------------------------------------------------------
+hmrc = executable('hmrc', 'src/tools/hmrc.cpp',
+  dependencies: hmrc_deps,
+  cpp_args: hmrc_args)
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 if get_option('build_tests')

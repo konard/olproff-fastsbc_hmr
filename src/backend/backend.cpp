@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// Backend.cpp — LLVM IR text → optimized native object (or optimized IR text).
+// backend.cpp — LLVM IR text → optimized native object (or optimized IR text).
 
-#include "hmr/backend/Backend.hpp"
+#include "hmr/backend/backend.hpp"
 
 #include <memory>
 #include <mutex>
@@ -33,7 +33,7 @@ using namespace llvm;
 
 // Initialize the native target exactly once, regardless of how many times the
 // backend runs (idempotent + thread-safe).
-void ensureTargetsInitialized() {
+void ensure_targets_initialized() {
     static std::once_flag once;
     std::call_once(once, [] {
         InitializeNativeTarget();
@@ -62,7 +62,7 @@ struct HmrAttributePass : PassInfoMixin<HmrAttributePass> {
     }
 };
 
-OptimizationLevel toLevel(unsigned o) {
+OptimizationLevel to_level(unsigned o) {
     switch (o) {
         case 0: return OptimizationLevel::O0;
         case 1: return OptimizationLevel::O1;
@@ -85,15 +85,15 @@ struct OptimizedModule {
 // the host (or requested) target machine, verify, then run the HMR pass plus
 // the standard -O<n> module pipeline. On return the module is fully optimized;
 // callers either emit an object from it or print it back to text.
-Result<OptimizedModule> parseAndOptimize(const std::string& llvmIR,
-                                         const BackendOptions& opts) {
-    ensureTargetsInitialized();
+Result<OptimizedModule> parse_and_optimize(const std::string& llvm_ir,
+                                           const BackendOptions& opts) {
+    ensure_targets_initialized();
 
     OptimizedModule out;
     out.context = std::make_unique<LLVMContext>();
 
     SMDiagnostic diag;
-    out.module = parseAssemblyString(llvmIR, diag, *out.context);
+    out.module = parseAssemblyString(llvm_ir, diag, *out.context);
     if (!out.module) {
         std::string msg;
         raw_string_ostream os(msg);
@@ -106,19 +106,19 @@ Result<OptimizedModule> parseAndOptimize(const std::string& llvmIR,
     if (!out.module->getSourceFileName().empty())
         out.module->setModuleIdentifier(out.module->getSourceFileName());
 
-    out.triple = opts.targetTriple.empty() ? sys::getDefaultTargetTriple()
-                                           : opts.targetTriple;
+    out.triple = opts.target_triple.empty() ? sys::getDefaultTargetTriple()
+                                            : opts.target_triple;
 
-    std::string lookupErr;
-    const Target* target = TargetRegistry::lookupTarget(out.triple, lookupErr);
+    std::string lookup_err;
+    const Target* target = TargetRegistry::lookupTarget(out.triple, lookup_err);
     if (!target)
         return make_error("backend: no target for triple '" + out.triple +
-                          "': " + lookupErr);
+                          "': " + lookup_err);
 
-    TargetOptions targetOpts;
+    TargetOptions target_opts;
     auto reloc = std::optional<Reloc::Model>(Reloc::PIC_);  // PIC → shared object
     out.tm.reset(target->createTargetMachine(out.triple, opts.cpu, opts.features,
-                                             targetOpts, reloc));
+                                             target_opts, reloc));
     if (!out.tm) return make_error("backend: could not create target machine");
 
     out.module->setTargetTriple(out.triple);
@@ -153,10 +153,10 @@ Result<OptimizedModule> parseAndOptimize(const std::string& llvmIR,
         pre.run(*out.module, mam);
     }
     {
-        const OptimizationLevel level = toLevel(opts.optLevel);
+        const OptimizationLevel level = to_level(opts.opt_level);
         ModulePassManager mpm =
-            (opts.optLevel == 0) ? pb.buildO0DefaultPipeline(level)
-                                 : pb.buildPerModuleDefaultPipeline(level);
+            (opts.opt_level == 0) ? pb.buildO0DefaultPipeline(level)
+                                  : pb.buildPerModuleDefaultPipeline(level);
         mpm.run(*out.module, mam);
     }
 
@@ -165,20 +165,20 @@ Result<OptimizedModule> parseAndOptimize(const std::string& llvmIR,
 
 }  // namespace
 
-Result<ObjectCode> Backend::compileToObject(const std::string& llvmIR,
-                                            const BackendOptions& opts) {
-    auto opt = parseAndOptimize(llvmIR, opts);
+Result<ObjectCode> Backend::compile_to_object(const std::string& llvm_ir,
+                                              const BackendOptions& opts) {
+    auto opt = parse_and_optimize(llvm_ir, opts);
     if (!opt) return std::unexpected(opt.error());
 
     // --- object emission (legacy codegen pass manager) ---------------------
     SmallVector<char, 0> buffer;
-    raw_svector_ostream objStream(buffer);
-    legacy::PassManager codegenPM;
-    if (opt->tm->addPassesToEmitFile(codegenPM, objStream, /*DwoOut=*/nullptr,
+    raw_svector_ostream obj_stream(buffer);
+    legacy::PassManager codegen_pm;
+    if (opt->tm->addPassesToEmitFile(codegen_pm, obj_stream, /*DwoOut=*/nullptr,
                                      CodeGenFileType::ObjectFile)) {
         return make_error("backend: target cannot emit object files");
     }
-    codegenPM.run(*opt->module);
+    codegen_pm.run(*opt->module);
 
     ObjectCode out;
     out.triple = opt->triple;
@@ -186,9 +186,9 @@ Result<ObjectCode> Backend::compileToObject(const std::string& llvmIR,
     return out;
 }
 
-Result<std::string> Backend::optimizeIR(const std::string& llvmIR,
-                                        const BackendOptions& opts) {
-    auto opt = parseAndOptimize(llvmIR, opts);
+Result<std::string> Backend::optimize_ir(const std::string& llvm_ir,
+                                         const BackendOptions& opts) {
+    auto opt = parse_and_optimize(llvm_ir, opts);
     if (!opt) return std::unexpected(opt.error());
 
     std::string out;

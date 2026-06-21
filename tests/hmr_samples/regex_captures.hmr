@@ -17,6 +17,7 @@ sip-manipulation RegexCaptures
                         name    flipUser
                         type    uri-user
                         action  replace
+                        comparison-type  pattern-rule
                         match-value  ([a-z0-9]+)\.([a-z0-9]+)
                         new-value    $2.$1
 
