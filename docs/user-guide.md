@@ -99,9 +99,12 @@ sip-manipulation TopologyHiding
 The authoritative surface-syntax/keyword reference is
 [oracle-hmr-reference.md](./oracle-hmr-reference.md); the formal grammar is
 [`grammar/Hmr.g4`](../grammar/Hmr.g4); worked rulesets live in
-[`tests/hmr_samples/`](../tests/hmr_samples) (topology hiding, From
-anonymization, PAI normalization) alongside `invalid_*.hmr` negatives. The
-feature support table is in [compatibility-matrix.md](./compatibility-matrix.md).
+[`tests/hmr_samples/`](../tests/hmr_samples): a minimal ruleset, a broad
+`full_example`, focused samples for regex captures, IP matching, multiple
+headers, nested elements and every built-in variable, three realistic rulesets
+(topology hiding, From anonymization, PAI normalization), and `invalid_*.hmr`
+negatives. The feature support table is in
+[compatibility-matrix.md](./compatibility-matrix.md).
 
 ## Loading a module from a host
 

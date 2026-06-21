@@ -1,0 +1,42 @@
+# Exercises every built-in HMR variable resolved by the runtime ABI. Each rule
+# interpolates one group of variables into a diagnostic header so the full set
+# is covered: $LOCAL_IP $REMOTE_IP $LOCAL_PORT $REMOTE_PORT $TRUNK_GROUP $REALM
+# $INTERFACE $METHOD $RURI_USER $RURI_HOST $TO_USER $TO_HOST $FROM_USER $FROM_HOST
+sip-manipulation AllVariables
+        description  "Interpolate every built-in variable"
+
+        header-rule
+                name         localContext
+                header-name  X-Local
+                action       add
+                new-value    $LOCAL_IP:$LOCAL_PORT
+
+        header-rule
+                name         remoteContext
+                header-name  X-Remote
+                action       add
+                new-value    $REMOTE_IP:$REMOTE_PORT
+
+        header-rule
+                name         trunkContext
+                header-name  X-Trunk
+                action       add
+                new-value    group=$TRUNK_GROUP realm=$REALM iface=$INTERFACE
+
+        header-rule
+                name         methodContext
+                header-name  X-Method
+                action       add
+                new-value    $METHOD
+
+        header-rule
+                name         requestUri
+                header-name  X-RURI
+                action       add
+                new-value    $RURI_USER@$RURI_HOST
+
+        header-rule
+                name         dialogParties
+                header-name  X-Parties
+                action       add
+                new-value    to=$TO_USER@$TO_HOST from=$FROM_USER@$FROM_HOST

@@ -1,0 +1,78 @@
+# A broad ruleset exercising most recognized HMR features in one manipulation:
+# descriptions, msg-type / methods conditions, every comparison-type, store and
+# back-reference, nested element-rules over several URI parts, variable
+# interpolation, and the add / manipulate / delete-header / reject / log actions.
+sip-manipulation FullExample
+        description  "Exercises the breadth of supported HMR constructs"
+
+        # store a capture for later back-reference
+        header-rule
+                name             captureCallId
+                header-name      Call-ID
+                action           store
+                comparison-type  pattern-rule
+                match-value      ([0-9a-f]+)@(.+)
+
+        # conditional add, restricted to INVITE/UPDATE requests
+        header-rule
+                name             assertIdentity
+                header-name      P-Asserted-Identity
+                action           add
+                msg-type         request
+                methods          INVITE,UPDATE
+                new-value        sip:$TRUNK_GROUP@$LOCAL_IP
+
+        # case-insensitive manipulate drilling into the From URI
+        header-rule
+                name             rewriteFrom
+                header-name      From
+                action           manipulate
+                comparison-type  case-insensitive
+                msg-type         request
+                element-rule
+                        name         maskHost
+                        type         uri-host
+                        action       replace
+                        match-value  internal\.example\.com
+                        new-value    $LOCAL_IP
+                element-rule
+                        name         anonUser
+                        type         uri-user
+                        action       replace
+                        match-value  .+
+                        new-value    anonymous
+                element-rule
+                        name         maskDisplay
+                        type         uri-display
+                        action       replace
+                        match-value  .*
+                        new-value    Anonymous
+
+        # echo a previously stored capture into a custom header
+        header-rule
+                name             echoCallId
+                header-name      X-Orig-Call-ID
+                action           add
+                new-value        $captureCallId.$1
+
+        # topology hiding: strip a leaky header
+        header-rule
+                name             dropServer
+                header-name      Server
+                action           delete-header
+
+        # observability: log matching replies
+        header-rule
+                name             logErrors
+                header-name      CSeq
+                action           log
+                msg-type         reply
+
+        # admission control: reject a blocked destination prefix
+        header-rule
+                name             rejectBlocked
+                header-name      To
+                action           reject
+                comparison-type  pattern-rule
+                msg-type         request
+                match-value      sip:1900[0-9]+@
