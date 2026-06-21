@@ -111,6 +111,24 @@ hmr_frontend_dep = declare_dependency(
   dependencies: antlr_dep)
 
 # ---------------------------------------------------------------------------
+# hmr_runtime — the thin native runtime every generated .so links against:
+# the stable C ABI, the zero-copy arena SIP model and the specialized
+# match-val-type matchers. No ANTLR/LLVM dependency; pure C++ + the C ABI.
+# ---------------------------------------------------------------------------
+hmr_runtime_sources = [
+  'src/runtime/matchers.cpp',
+]
+
+libhmr_runtime = static_library('hmr_runtime',
+  hmr_runtime_sources,
+  include_directories: hmr_inc,
+  cpp_args: hmr_warn_args)
+
+hmr_runtime_dep = declare_dependency(
+  include_directories: hmr_inc,
+  link_with: libhmr_runtime)
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 if get_option('build_tests')

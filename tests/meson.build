@@ -10,6 +10,12 @@ parse_one = executable('parse_one', 'parse_one.cpp',
   dependencies: hmr_frontend_dep,
   cpp_args: hmr_warn_args)
 
+# Unit suite — self-contained (tests/Test.hpp), one executable per area.
+test_matchers = executable('test_matchers', 'test_matchers.cpp',
+  dependencies: hmr_runtime_dep,
+  cpp_args: hmr_warn_args)
+test('matchers', test_matchers, suite: 'unit')
+
 samples_dir = meson.current_source_dir() / 'hmr_samples'
 
 valid_samples = [
