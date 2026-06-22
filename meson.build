@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # fastsbc_hmr — Oracle HMR (Header Manipulation Rules) DSL -> native .so
 # compiler that lowers directly to LLVM IR.
@@ -14,7 +14,7 @@
 
 project('fastsbc_hmr', 'cpp',
   version: '0.2.0',
-  license: 'MIT',
+  license: 'GPL-3.0-or-later',
   meson_version: '>=1.1.0',
   default_options: [
     'cpp_std=c++23',          # C++26 features are shimmed in support/compat.hpp
@@ -25,6 +25,7 @@ project('fastsbc_hmr', 'cpp',
   ])
 
 cpp = meson.get_compiler('cpp')
+python3 = find_program('python3')
 
 # Extra warnings layered on top of warning_level=2 for OUR code only. The
 # ANTLR-generated translation units are compiled separately with warnings off.
@@ -32,6 +33,10 @@ hmr_warn_args = cpp.get_supported_arguments(
   '-Wshadow', '-Wconversion', '-Wsign-conversion', '-Wpedantic')
 
 hmr_inc = include_directories('include')
+
+update_license_header = files('scripts/update_license_header.py')
+run_target('update-license',
+  command: [python3, update_license_header, meson.project_source_root()])
 
 # ---------------------------------------------------------------------------
 # ANTLR4 — generate the parser and link the C++ runtime.

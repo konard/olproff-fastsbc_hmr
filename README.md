@@ -70,6 +70,9 @@ meson setup builddir \
 meson compile -C builddir
 meson test    -C builddir                # the ANTLR runtime is linked statically — no LD_LIBRARY_PATH needed
 
+# When adding a new source file, run `meson compile -C build update-license`
+# (replace `build` with your configured build directory, such as `builddir`).
+
 # Compile an HMR ruleset to a native module:
 ./builddir/hmrc compile tests/hmr_samples/topology_hiding.hmr -o topo.so
 

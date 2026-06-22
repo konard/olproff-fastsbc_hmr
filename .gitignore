@@ -19,6 +19,8 @@ compile_commands.json
 /grammar/*.tokens
 
 # Object files, libraries, binaries
+__pycache__/
+*.pyc
 *.o
 *.obj
 *.so

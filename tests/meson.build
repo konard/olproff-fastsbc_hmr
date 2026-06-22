@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Front-end test suite. For now: a data-driven `samples` suite that parses every
 # bundled .hmr file with the ANTLR-backed parser, asserting the valid corpus
@@ -7,6 +7,10 @@
 # milestone as the runtime/codegen layers are converted to snake_case.
 
 samples_dir = meson.current_source_dir() / 'hmr_samples'
+
+test('update-license-header', python3,
+  args: [files('test_update_license_header.py'), meson.project_source_root()],
+  suite: 'unit')
 
 parse_one = executable('parse_one', 'parse_one.cpp',
   dependencies: hmr_frontend_dep,
