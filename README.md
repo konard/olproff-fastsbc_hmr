@@ -195,4 +195,4 @@ generator — LLVM 17 or 18 (`llvm-dev`). See
 
 ## License
 
-[MIT](LICENSE).
+[GPLv3](LICENSE).
